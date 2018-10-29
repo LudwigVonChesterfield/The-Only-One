@@ -4,6 +4,7 @@ import math
 import threading
 import time
 import sys
+import copy
 
 # Defines go here.
 #sys.stdout = open('log.txt', 'w') # Uncomment if you want to export to a log file.
@@ -11,6 +12,7 @@ import sys
 log = ""
 sqrt_2 = math.sqrt(2)
 runtime = True
+to_sleep_chance = 10
 atoms_by_name = {}
 
 def time_to_date(time): # Time is in hours.
@@ -27,7 +29,7 @@ def time_to_date(time): # Time is in hours.
     if(day > 0):
         time = time - day * 24
     return number_to_day(day) + "." + number_to_month(month) + "." + number_to_year(year)
-    
+
 def number_to_year(num):
     if(num > 999):
         return str(num)
@@ -72,7 +74,7 @@ def pick_weighted(sequence):
     return random.choice(choices)
 
 def clamp(val, min_, max_):
-    return min(max(val, min_), max_)
+    return min([max([val, min_]), max_])
 
 def find_in_list(list, obj):
     for item in list:
@@ -119,7 +121,24 @@ def master_controller():
 
 def text_to_path(text):
     return atoms_by_name[text]
-        
+
+def sort_by_priority(to_sort: list):
+    if(not to_sort):  # Safety measures.
+        return []  # Safety measures.
+    atom_list = copy.deepcopy(to_sort)
+    atoms = []
+    while(len(atom_list)):
+        max_atom = None
+        max_atom_priority = -1
+        for atom in atom_list:
+            if(atom.priority > max_atom_priority):
+                max_atom_priority = atom.priority
+                max_atom = atom
+        atoms.append(max_atom)
+        atom_list.remove(max_atom)
+    return atoms
+
+
 # World stuff goes here.
 worlds = []
 
@@ -128,7 +147,7 @@ class World:
     map_c = {}
     contents = []
     max_x = 50
-    max_y = 50
+    max_y = 34
     z = -1
     allowed_turfs = {"Plains" : 100, "Hills" : 25, "Rocky" : 10}
     struc_per_tile = 3
@@ -145,6 +164,65 @@ class World:
         self.generate_world()
         self.initiated = True
         worlds.append(self)
+
+    def ClickedOn(self, GUI, x_, y_):
+        strucs = self.get_tile_contents(x_, y_)
+        for struc in strucs:
+            if(struc.overrideClick(GUI, x_, y_)):  # If they override click, they issue their own code, stop click handling from here.
+                return
+
+        self.show_turf(GUI, x_, y_)
+
+
+    def show_turf(self, GUI, x_, y_):
+        strucs = sort_by_priority(self.get_tile_contents(x_, y_))
+        if(not strucs):
+            return  # Nothing to see.
+        show = ""
+        for struc in strucs:
+            show = show + struc.symbol + "[" + str(struc.priority) + "]\n"
+
+        if(GUI.showing_turf):
+            GUI.showing_turf_strucs = strucs
+            wid = int(round(4 * GUI.pixels_per_tile))
+            hei = int(round(len(strucs) * 3 * GUI.pixels_per_tile))
+            GUI.showing_turf.configure(width=wid, height=hei)
+            GUI.showing_turf.coords(GUI.showing_turf_content, int(round(wid // 2)), int(round(hei // 2)))
+            GUI.showing_turf.itemconfigure(GUI.showing_turf_content, text=show)
+            return
+
+        temp_wind = tkinter.Toplevel(GUI.wind)
+        temp_wind.title(u'The Tile')
+        temp_wind.resizable(False, False)
+
+        def on_close():
+            GUI.showing_turf = None
+            GUI.showing_turf_content = None
+            GUI.showing_turf_strucs = []
+            temp_wind.destroy()
+
+        temp_wind.protocol("WM_DELETE_WINDOW", on_close)
+
+        wid = int(round(4 * GUI.pixels_per_tile))
+        hei = int(round(len(strucs) * 3 * GUI.pixels_per_tile))
+
+        def on_click(event):
+            """Try-hard hack to make these objects clickable."""
+            y_ = int(round(event.y // (3 * GUI.pixels_per_tile)))
+            if(y_ >= 0 and y_ < len(GUI.showing_turf_strucs)):
+                atom = GUI.showing_turf_strucs[y_]
+                atom.ClickedOn(GUI, atom.x, atom.y)  # Cheap hack to get at least some x and y to be passed.
+
+
+        temp_map_field = tkinter.Canvas(temp_wind, width=wid, height=hei, bg='black')
+        temp_map_field.bind("<ButtonPress-1>", on_click)
+        temp_map_bg = temp_map_field.create_text(int(round(wid // 2)), int(round(hei // 2)), text=show, fill = 'green', font = 'TkFixedFont')
+
+        GUI.showing_turf = temp_map_field
+        GUI.showing_turf_content = temp_map_bg
+        GUI.showing_turf_strucs = strucs
+
+        temp_map_field.pack()
 
     def get_world(self):
         return self
@@ -263,7 +341,9 @@ class World:
         self.processing = False
 
     def process_time(self):
-        time.sleep(0)
+        global to_sleep_chance
+        if(prob(to_sleep_chance)):
+        	time.sleep(1)
         closest_time = self.time + 1
         atoms_action = None
         for atom in self.process_atoms:
@@ -322,8 +402,7 @@ class Atom:
     priority = 0
 
     name = ""
-    display_name = "" # Since "name" is more of a type, really.
-    description = ""
+    default_description = "I am an Atom."
 
     obstruction = False
     size = 0
@@ -331,9 +410,6 @@ class Atom:
     needs_processing = False
 
     action_time = 0
-
-    resource = ""
-    job_to_harvest = ""
 
     def __init__(self, loc, x, y):
         self.x = - 1
@@ -343,14 +419,31 @@ class Atom:
         self.contents = []
         self.move_atom_to(loc, x, y)
         self.last_action = self.world.time
-        self.display_name = self.name
+        self.description = self.default_description
+        self.display_name = self.name  # Since "name" is more of a type, really.
         self.integrity = self.size
         self.qdeling = False
-        self.been_used = False
-        self.resource_multiplier = random.uniform(1.0, 1.5)
         atoms.append(self)
         if(self.needs_processing):
             self.world.process_atoms.append(self)
+
+    def overrideClick(self, GUI, x_, y_):
+        if(self.canClickOn(GUI, x_, y_)):
+            return self.ClickedOn(GUI, x_, y_)
+        return False
+
+    def canClickOn(self, GUI, x_, y_):  # Change this in case of special behavior.
+        return False
+
+    def ClickedOn(self, GUI, x_, y_):
+        self.Examinated(GUI)  # Default behavior of clicking on it, is just this.
+
+    def Examinated(self, GUI):
+        global log
+        log = log + self.getExamineText() + "\n"
+
+    def getExamineText(self):
+        return str(self.symbol) + " [" + self.display_name + "] " + self.default_description
 
     def get_world(self):
         if(isinstance(loc, World)):
@@ -392,13 +485,13 @@ class Atom:
         for struc in world.get_tile_contents(x, y):
             if(struc.does_obstruct(self)):
                 return False
-        if(get_distance(self.x, self.y, x, y) > sqrt_2): # sqrt_2 = math.sqrt(2), because diagonal tiles?
+        if(get_distance(self.x, self.y, x, y) > sqrt_2):  # sqrt_2 = math.sqrt(2), because diagonal tiles?
            return False
         self.move_atom_to(world, x, y)
         return True
 
     def move_towards_to(self, world, x, y):
-        dummy_moves = 3 # Set this to something higher if you want some wacky shit.
+        dummy_moves = 3  # Set this to something higher if you want some wacky shit.
         x_ = self.x + get_vector(self.x, x)
         y_ = self.y + get_vector(self.y, y)
         while(dummy_moves):
@@ -426,6 +519,9 @@ class Atom:
 
     def fire_act(self, severity): # Return True if it is susceptible to fires.
         return False
+
+    def get_task(self, city):
+        return None  # If this returns None, consider skipping trying to get task from this.
 
     def qdel(self):
         self.qdeling = True
@@ -476,21 +572,25 @@ class Mob(Moveable):
 class Plains(Turf):
     symbol = "_"
     name = "Plains"
+    default_description = "A plain sight, not much to see."
     allowed_contents = {"Nothing" : 100, "Tall_Grass" : 30, "Forest" : 5}
 
 class Hills(Turf):
     symbol = "-"
     name = "Hills"
+    default_description = "Hilly terrain. Up and down..."
     allowed_contents = {"Nothing" : 100, "Forest" : 1}
 
 class Rocky(Turf):
     symbol = "="
     name = "Rocky"
+    default_description = "Hills, but with a slight chance of rocks being around."
     allowed_contents = {"Nothing" : 100, "Mountain" : 10, "Iron_Deposit" : 3, "Gold_Deposit" : 1, "Forest" : 1}
 
 class Water(Turf):
     symbol = "~"
     name = "Water"
+    default_description = "Wet. Moist. Is a fluid."
     obstruction = True
 
 #Objects.
@@ -504,6 +604,7 @@ class Nothing(Object):
 class Fire(Object):
     symbol = "x"
     name = "Fire"
+    default_description = "Full of passion and desire, it is very much a fire."
     size = 3
     priority = 19
 
@@ -525,7 +626,7 @@ class Fire(Object):
             if(x_ == self.x and y_ == self.y):
                 for struc in strucs:
                     if(struc.fire_act(1)):
-                        self.integrity = min(self.integrity + 1, self.size)
+                        self.integrity = min([self.integrity + 1, self.size])
                 continue
             for struc in strucs:
                 if(isinstance(struc, Fire)):
@@ -542,56 +643,147 @@ class Fire(Object):
     def spread_to(self, x, y):
         Fire(self.world, x, y, self.integrity)
 
-class Tall_Grass(Object):
+class Resource(Object):
+    harvestable = False
+    allow_peasants = False
+    resource = ""
+    job_to_harvest = ""
+    harv_priority = 0
+
+    def_amount = 0
+
+    def __init__(self, loc, x, y):
+        super().__init__(loc, x, y)
+        self.been_used = False
+        self.resource_multiplier = random.uniform(1.0, 1.5)
+        self.resourcefulness = self.get_max_resourcefulness()
+
+    def get_max_resourcefulness(self):
+        return int(round(self.def_amount * self.resource_multiplier * self.integrity * random.uniform(0.9, 1.1)))
+
+    def get_task(self, city):
+        if(self.harvestable):
+            return {"priority" : self.harv_priority, "job" : self.job_to_harvest, "task" : "harvest", "target" : self, "allowed_peasants" : self.allow_peasants}
+
+    def harvest(self, harvester, amount):
+        """Returns how much resource has actually been harvested."""
+        if(not self.harvestable):
+            return 0
+        self.been_used = True
+        to_return = 0
+        if(self.resourcefulness >= amount):
+            to_return = amount
+        else:
+            to_return = self.resourcefulness
+        if(prob(harvester.loc.action_time)):
+            severity = 0
+            if(self.resourcefulness > amount * harvester.action_time):
+                severity = int(round(self.resourcefulness / (self.resourcefulness - (amount * harvester.loc.action_time))))
+            else:
+                severity = self.integrity
+            self.crumble(severity)
+        return to_return
+
+    def crumble(self, severity):
+        if(not super().crumble(severity)):
+            self.resourcefulness = min([self.resourcefulness, self.get_max_resourcefulness()])
+            if(self.resourcefulness <= 0):
+                qdel(self)
+                del self
+                return True  # We have crumbled due to lack of resource.
+            return False
+        return True
+
+
+class Tall_Grass(Resource):
     name = "Tall_Grass"
+    default_description = "A grass to eat when hungy."
     size = 3
     priority = 0
 
+    symbol = "|"
+
+    harvestable = True
+    allow_peasants = True
     resource = "food"
     job_to_harvest = "Farmer"
+    harv_priority = 1
+
+    def_amount = 100
 
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
-class Forest(Object):
+
+class Forest(Resource):
     symbol = "^"
     name = "Forest"
+    default_description = "A place for trees to go, for a Lumberjack to cut."
     size = 10
 
+    harvestable = True
+    allow_peasants = True
     resource = "wood"
     job_to_harvest = "Lumberjack"
+    harv_priority = 3
+
+    def_amount = 100
 
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
-class Mountain(Object):
+
+class Mountain(Resource):
     symbol = "A"
     name = "Mountain"
+    default_description = "A rock of rocks, that is rockier than most."
     obstruction = True
     size = 15
 
+    harvestable = True
+    allow_peasants = True
     resource = "stone"
     job_to_harvest = "Miner"
+    harv_priority = 5
 
-class Iron_Deposit(Object):
+    def_amount = 100
+
+
+class Iron_Deposit(Resource):
     name = "Iron_Deposit"
+    default_description = "It has iron in it!"
     obstruction = True
     size = 3
     priority = 0
+    symbol = "i"
 
+    harvestable = True
+    allow_peasants = False
     resource = "iron"
     job_to_harvest = "Miner"
+    hav_priority = 4
 
-class Gold_Deposit(Object):
+    def_amount = 10
+
+
+class Gold_Deposit(Resource):
     name = "Gold_Deposit"
+    default_description = "It has gold in it!"
     obstruction = True
     size = 3
     priority = 0
+    symbol = "g"
 
+    harvestable = True
+    allow_peasants = False
     resource = "gold"
     job_to_harvest = "Miner"
+    harv_priority = 4
+
+    def_amount = 10
+
 
 class Tool(Object):
     name = ""
@@ -645,6 +837,7 @@ class Saw(Tool):
 class City(Object):
     symbol = "1"
     name = "City"
+    default_description = ""  # Uses custom code.
     priority = 30 # Should actually be above mob layer.
     size = 5
 
@@ -671,7 +864,6 @@ class City(Object):
                              "Carpenter" : 1}
         self.structure_requests = []
         self.tasks = []
-        self.size = self.integrity
         if(faction):
             self.faction = faction
             self.faction.add_to_faction(self)
@@ -682,9 +874,16 @@ class City(Object):
                           "stone" : 0,
                           "iron" : 0,
                           "gold" : 0}
+
         for N in range(self.starting_citizens):
             self.add_citizen(Peasant)
-        log = log + self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+
+        log += self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+
+    def getExamineText(self):
+        text = super().getExamineText()
+        text += "It is a city of " + self.faction.display_name + " and it has " + str(len(self.citizens)) + " citizens in it!"
+        return text
 
     def qdel(self):
         global log
@@ -730,24 +929,28 @@ class City(Object):
         self.tasks = []
 
         for struc in strucs:
+            task = struc.get_task(self)  # We pass ourselves as city argument.
+            if(not task):  # This thing dindu tasking.
+                continue
+
+            if(isinstance(struc, Resource) and struc.resource):
+                if(self.resources[struc.resource] >= 500):  # We have enough of this...
+                    continue
+
             if(isinstance(struc, Tall_Grass)):
                 food_supply = food_supply + 1
                 if(food_required > 0):
-                    self.tasks.append({"priority" : 1, "job" : "Farmer", "task" : "harvest", "target" : struc, "allowed_peasants" : True})
                     food_required = food_required - 1
+                else:  # If we have enough food, stop getting it.
+                    continue
             if(isinstance(struc, Farm)):
                 food_supply = food_supply + 3
                 if(food_required > 0):
-                    self.tasks.append({"priority" : 1, "job" : "Farmer", "task" : "harvest", "target" : struc, "allowed_peasants" : False})
                     food_required = food_required - 3
-            if(isinstance(struc, Mountain)):
-                self.tasks.append({"priority" : 5, "job" : "Miner", "task" : "harvest", "target" : struc, "allowed_peasants" : True})
-            if(isinstance(struc, Mine)):
-                self.tasks.append({"priority" : 5, "job" : "Miner", "task" : "harvest", "target" : struc, "allowed_peasants" : False})
-            if(isinstance(struc, Forest)):
-                self.tasks.append({"priority" : 3, "job" : "Lumberjack", "task" : "harvest", "target" : struc, "allowed_peasants" : True})
-            if(isinstance(struc, Construction)):
-                self.tasks.append({"priority" : 2, "job" : "Builder", "task" : "construct", "target" : struc, "allowed_peasants" : False})
+                else:  # If we have enough food, stop getting it.
+                    continue
+
+            self.tasks.append(task)
 
         for job_request in self.job_requests:
             if(job_request == "Farmer"):
@@ -798,14 +1001,16 @@ class City(Object):
                 for citizen in cits:
                     if(citizen.qdeling):
                         continue
-                    if(citizen.actions_to_perform <= 0):
+                    if(citizen.actions_to_perform <= 0 and prob(citizen.age // 8760)):  # The older the person, the less he'd want to overwork.
                         continue
-                    if(prob(citizen.age)): # Old people just tend to refuse to work sometimes.
+                    if(citizen.actions_to_perform <= -citizen.max_actions_to_perform):  # See: citizens overworking themselves to death.
                         continue
-                    print(citizen.display_name + " is trying to perform " + str(task))
-                    print("Has actions left: " + str(citizen.actions_to_perform))
+                    if(prob(citizen.age) // 8760): # Old people just tend to refuse to work sometimes.
+                        continue
+                    #print(citizen.display_name + " is trying to perform " + str(task))
+                    #print("Has actions left: " + str(citizen.actions_to_perform))
                     if(citizen.perform_task(strucs, task)):
-                        print(citizen.display_name + " has succesfully performed above task")
+                        #print(citizen.display_name + " has succesfully performed above task")
                         self.tasks.remove(task)
                         break
             cur_priority = cur_priority + 1
@@ -816,11 +1021,12 @@ class City(Object):
             for c in range(5):
                 cit.add_citizen(Peasant)
                 self.remove_citizen(None)
-        if(food_supply > len(self.citizens) and len(self.citizens) <= self.max_population):
+
+        if(self.resources["food"] > 30 and food_supply > len(self.citizens) and len(self.citizens) <= self.max_population):
+            self.resources["food"] -= 30
             self.add_citizen(Peasant)
 
         for citizen in self.citizens:
-            citizen.actions_to_perform = citizen.actions_to_perform + 1
             if(not citizen.qdeling):
                 if(citizen.life()):
                     citizen.try_equip() # Even old people steal tools.
@@ -828,10 +1034,9 @@ class City(Object):
         houses_count = 0
         for struc in strucs:
             struc.been_used = False
-            if(isinstance(struc, House) and len(self.citizens)):
+            if(isinstance(struc, House)):
                 houses_count = houses_count + 1
-                citizen = random.choice(self.citizens)
-                citizen.actions_to_perform = min(citizen.actions_to_perform + 1, citizen.max_actions_to_perform)
+
         self.max_population = 10 + houses_count * 2
 
         if(len(self.citizens) < 100):
@@ -851,9 +1056,9 @@ class City(Object):
                     continue
                 struc.crumble(self.size)
         print(self.display_name)
-        print(self.faction.display_name)
+        #print(self.faction.display_name)
         print(self.resources)
-        print(self.inventory)
+        #print(self.inventory)
         l = ""
         for cit in self.citizens:
             l = l + cit.display_name + " "
@@ -865,10 +1070,6 @@ class City(Object):
         citizen.try_equip()
 
     def remove_citizen(self, citizen_):
-        for citizen in self.citizens:
-            if(citizen.loc == None):
-                citizen.qdel()
-                del citizen
         if(citizen_):
             citizen_.qdel()
             del citizen_
@@ -906,14 +1107,13 @@ class City(Object):
             self.remove_citizen(None)
             return True
 
-class Structure(Object): #Only one per tile.
+class Structure(Resource): #Only one per tile.
     size = 5
     priority = 12
 
 class Construction(Structure):
     symbol = "c"
     name = "Construction"
-    work_required = 1
 
     def __init__(self, loc, x, y, to_construct, struc_type):
         super().__init__(loc, x, y)
@@ -927,6 +1127,9 @@ class Construction(Structure):
             self.qdel()
             del self
 
+    def get_task(self, city):
+        return {"priority" : 2, "job" : "Builder", "task" : "construct", "target" : self, "allowed_peasants" : False}
+
     def qdel(self):
         self.qdeling = True
         self.struc_type = None
@@ -937,6 +1140,9 @@ class House(Structure):
     name = "House"
     work_required = 15
 
+    def get_task(self, city):
+        return {"priority" : 5, "job" : "Peasant", "task" : "rest", "target" : self, "allowed_peasants" : True}
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
@@ -946,18 +1152,34 @@ class Farm(Structure):
     name = "Farm"
     work_required = 10
 
-    resource = "wood"
+    harvestable = True
+    allow_peasants = False
+    resource = "food"
+    job_to_harvest = "Farmer"
+    harv_priority = 1
+
+    def_amount = 100
 
     def fire_act(self, severity):
         self.crumble(severity)
         return True
+
 
 class Mine(Structure):
     symbol = "m"
     name = "Mine"
     work_required = 20
 
+    harvestable = True
+    allow_peasants = False
     resource = "stone"
+    job_to_harvest = "Miner"
+    harv_priority = 4
+
+    def_amount = 100
+
+    def get_task(self, city):
+        return {"priority" : 5, "job" : "Miner", "task" : "harvest", "target" : self, "allowed_peasants" : False}
 
 #Mobs.
 class Citizen(Mob):
@@ -985,21 +1207,30 @@ class Citizen(Mob):
         self.tool = None
 
     def life(self):
+        self.actions_to_perform += 1
         self.saturation = max(self.saturation - round(self.hunger_rate * self.loc.action_time), 0)
-        to_grab = min(self.max_saturation - self.saturation, self.loc.resources["food"])
-        self.loc.resources["food"] = max(self.loc.resources["food"] - to_grab, 0)
+        to_grab = min([self.max_saturation - self.saturation, self.loc.resources["food"]])
+        self.loc.resources["food"] = max([self.loc.resources["food"] - to_grab, 0])
         self.saturation = self.saturation + to_grab
         self.age = self.age + self.loc.action_time
+
+        if(self.actions_to_perform <= 0):  # OVERWORKING: Citizens can work more than they should, but they will die quicker.
+            if(prob((self.age // 8760) * abs(self.actions_to_perform))):
+                self.loc.remove_citizen(self)
+                return False
+
         if(self.saturation == 0):
             self.malnutrition = self.malnutrition + 1 + (self.age // 8760) # Age in years.
             if(prob(self.malnutrition)):
                 self.loc.remove_citizen(self)
                 return False # Dead. Gray dead.
+
         if(prob(self.age // 8760)): # Sometimes they just die.
             self.loc.remove_citizen(self)
             return False
+
         elif(self.malnutrition > 0):
-            self.manlutrition = max(self.malnutrition - round(self.max_saturation / (self.saturation + 1)), 0)
+            self.manlutrition = max([self.malnutrition - round(self.max_saturation // (self.saturation + 1)), 0])
         return True # If it didn't die this iteration.
 
     def qdel(self):
@@ -1037,6 +1268,8 @@ class Citizen(Mob):
                 if(is_instance_in_list(struc, look_for)):
                     return self.build(task["res_required"], task["target"], struc.world, struc.x, struc.y)
             return False
+        elif(task["task"] == "rest"):
+            return self.rest(task["target"])
         return False
 
     def create(self, resources_required, item_type):
@@ -1046,7 +1279,7 @@ class Citizen(Mob):
         for res in resources_required:
             self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
         self.loc.inventory.append(item_type(self.loc, -2, -2, resources_required, self.quality_modifier))
-        self.actions_to_perform = self.actions_to_perform - 1
+        self.actions_to_perform -= 1
         return True
 
     def build(self, resources_required, struc_, world, x, y):
@@ -1057,25 +1290,32 @@ class Citizen(Mob):
                 return False
         for res in resources_required:
             self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
-        self.actions_to_perform = self.actions_to_perform - 1
+        self.actions_to_perform -= 1
         Construction(world, x, y, struc_.work_required, struc_)
         return True
 
     def construct(self, target):
         target.construct(round(self.quality_modifier * self.loc.action_time))
-        self.actions_to_perform = self.actions_to_perform - 1
+        self.actions_to_perform -= 1
         return True
 
     def harvest(self, target):
         if(not target.been_used):
-            target.been_used = True
-            if(prob(self.loc.action_time)):
-                if(target.crumble(1)):
-                    return False
-            self.loc.resources[target.resource] = self.loc.resources[target.resource] + round(self.loc.action_time * target.resource_multiplier * self.get_tool_quality(target.job_to_harvest))
-            self.actions_to_perform = self.actions_to_perform - 1
-            return True
+            to_harvest = round(self.loc.action_time * target.resource_multiplier * self.get_tool_quality(target.job_to_harvest))
+            harvested = target.harvest(self, to_harvest)
+            if(harvested > 0):
+                self.loc.resources[target.resource] = self.loc.resources[target.resource] + harvested
+                self.actions_to_perform -= 1
+                return True
         return False
+
+    def rest(self, target):
+        if(target.been_used):
+            return False
+        else:
+            self.actions_to_perform = min([self.actions_to_perform + 2, self.max_actions_to_perform])
+            return True
+
 
     def required_citizens(self, strucs):
         requests = {"Peasant" : 0,
@@ -1112,7 +1352,7 @@ class Citizen(Mob):
             if(isinstance(struc, Rocky)):
                 requests["Mine"] = requests["Mine"] + 1
         requests["Farm"] = requests["Farm"] + round(len(self.loc.citizens) / 3)
-        print(str(requests["Farm"]) + " is estimated required farm number")
+        #print(str(requests["Farm"]) + " is estimated required farm number")
         requests["House"] = requests["House"] + (round(self.loc.max_population - len(self.loc.citizens)) == 0)
         return requests
 
@@ -1246,7 +1486,6 @@ class Citizens(Mob):
         self.try_new = 3
         self.citizens = []
         self.inventory = []
-        self.size = self.integrity
         if(faction):
             self.faction = faction
             self.faction.add_to_faction(self)
@@ -1273,7 +1512,7 @@ class Citizens(Mob):
 
     def life(self):
         if(self.resources["food"] > 100):
-            self.resources["food"] = max(self.resources["food"] - 50, 0)
+            self.resources["food"] = max([self.resources["food"] - 50, 0])
             self.add_citizen(Peasant)
 
         for citizen in self.citizens:
@@ -1315,7 +1554,7 @@ class Citizens(Mob):
             del self
     
     def handle_ai_movement(self):
-        self.resources["food"] = max(self.resources["food"] - (len(self.citizens) * self.action_time), 0)
+        self.resources["food"] = max([self.resources["food"] - (len(self.citizens) * self.action_time), 0])
         if(self.target):
             self.move_towards_to(self.world, target.x, target.y)
             return
@@ -1359,8 +1598,6 @@ class Citizens(Mob):
                 quality = quality + 1 * struc.resource_multiplier
             elif(isinstance(struc, Gold_Deposit)):
                 quality = quality + 1 * struc.resource_multiplier
-            elif(isinstance(struc, Water)):
-                quality = quality + 3 * struc.resource_multiplier
             elif(isinstance(struc, City)):
                 if(self.resources["food"] >= 3 * len(self.citizens) * self.action_time):
                     quality = quality + 10
@@ -1398,80 +1635,133 @@ class Citizens(Mob):
             self.remove_citizen(None)
         return True
 
+chosen_object = None # The object player currently is interacting with.
+
 #GUI.
 class Game_Window:
-    wind_wid = 0
-    wind_hei = 0
+    default_pixels_per_tile = 16.4
     wind = None
     cur_world = None
 
     def __init__(self, world):
+        self.showing_turf = None  # Is set to the showing turf window upon showing the turf.
+        self.showing_turf_content = None
+        self.showing_turf_strucs = []
+
+        self.pixels_per_tile = self.default_pixels_per_tile
+
         self.cur_world = world
-        self.wind_wid = int((self.cur_world.max_x * 16.6) // 1)
-        self.wind_hei = int((self.cur_world.max_y * 16.6) // 1)
+        self.wind_wid = int(round(self.cur_world.max_x * self.pixels_per_tile))
+        self.wind_hei = int(round(self.cur_world.max_y * self.pixels_per_tile))
 
         self.wind = tkinter.Tk()
         self.wind.title(u'The Game')
         self.wind.resizable(False, False)
 
-        left = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
-        right = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
-        container = tkinter.Frame(left, borderwidth=2, relief="solid")
-        box1 = tkinter.Frame(right, borderwidth=2, relief="solid")
-        box2 = tkinter.Frame(right, borderwidth=2, relief="solid")
+        self.left = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
+        self.right = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
+        self.container = tkinter.Frame(self.left, borderwidth=2, relief="solid")
+        self.box1 = tkinter.Frame(self.right, borderwidth=2, relief="solid")
+        self.box2 = tkinter.Frame(self.right, borderwidth=2, relief="solid")
 
-        map_field = tkinter.Canvas(container, width=self.wind_wid, height=self.wind_hei, bg='black')
-        map_bg = map_field.create_text(int(self.wind_wid) // 2, int(self.wind_hei // 2), text=self.cur_world.world_to_string(), fill = 'green', font = 'TkFixedFont')
-        chatlog = tkinter.Canvas(box1, width=int(self.wind_wid // 2), height=self.wind_hei, bg = 'dark blue')
-        chat = chatlog.create_text(int(self.wind_wid // 4), int(self.wind_hei // 2), text=log, fill = 'white', font = 'TkFixedFont 12')
+        def on_click(event):
+            x_ = int(round(event.x // self.pixels_per_tile))
+            y_ = int(round(event.y // self.pixels_per_tile))
+            self.cur_world.ClickedOn(self, x_, y_)
 
-        command_field = tkinter.Entry(left, width=int(self.wind_wid // 8))
-        command_field.focus_set()
+        self.map_field = tkinter.Canvas(self.container, width=self.wind_wid, height=self.wind_hei, bg='black')
+        self.map_field.bind("<ButtonPress-1>", on_click)
+        self.map_bg = self.map_field.create_text(int(round(self.wind_wid // 2)), int(round(self.wind_hei // 2)), text=self.cur_world.world_to_string(), fill = 'green', font = 'TkFixedFont')
+        self.chatlog = tkinter.Canvas(self.box1, width=int(round(self.wind_wid // 2)), height=self.wind_hei, bg = 'dark blue')
+        self.chat = self.chatlog.create_text(int(round(self.wind_wid // 4)), int(round(self.wind_hei // 2)), width = int(round(self.wind_wid // 2)),text=log, fill = 'white', font = 'TkFixedFont 12')
+        # Since it uses TkFixedFont 12, we divide by 12. Almost makes sense.
+        self.chat_lenght = int(round(self.wind_wid // 48))
+
+        self.command_field = tkinter.Entry(self.left, width=int(round(self.wind_wid // 8)))
+        self.command_field.focus_set()
 
         def action():
-            return
+            global to_sleep_chance
+            command = self.command_field.get()
+            args = command.split()
 
-        act_button = tkinter.Button(left, text="Act", width=int(self.wind_wid // 80), command=action)
-        current_time = tkinter.Label(box2, text="Current Time: " + time_to_date(self.cur_world.time))
+            if(args[0] == "Spawn" and len(args) >= 4):
+                if(args[1] in atoms_by_name):
+                    if(len(args) > 4):
+                        additional_args = []
+                        for arg in args[4:len(args)]:
+                            additional_args.append(arg)
+                        text_to_path(args[1])(self.cur_world, int(args[2]), int(args[3]), *additional_args)
+                    else:
+                        text_to_path(args[1])(self.cur_world, int(args[2]), int(args[3]))
 
-        left.pack(side="left", expand=True, fill="both")
-        right.pack(side="right", expand=True, fill="both")
-        container.pack(expand=True, fill="both", padx=5, pady=5)
-        box1.pack(expand=True, fill="both", padx=10, pady=10)
-        box2.pack(expand=True, fill="both", padx=10, pady=10)
+            elif(args[0] == "Show" and len(args) == 3):
+                self.cur_world.show_turf(self, int(args[1]), int(args[2]))
 
-        map_field.pack()
-        chatlog.pack()
-        command_field.pack()
-        act_button.pack()
-        current_time.pack()
+            elif(args[0] == "Stop"):
+                self.cur_world.processing = False
+
+            elif(args[0] == "Faster"):
+                if(not self.cur_world.processing):
+                    self.cur_world.processing = True
+                    to_sleep_chance = 100
+                    return
+
+                to_sleep_chance = max([0, to_sleep_chance - 10])
+
+            elif(args[0] == "Slower"):
+                if(to_sleep_chance == 100):
+                    self.cur_world.processing = False
+                    return
+
+                to_sleep_chance = min([100, to_sleep_chance + 10])
+
+
+        self.act_button = tkinter.Button(self.left, text="Act", width=int(self.wind_wid // 80), command=action)
+        self.current_time = tkinter.Label(self.box2, text="Current Time: " + time_to_date(self.cur_world.time))
+
+        self.left.pack(side="left", expand=True, fill="both")
+        self.right.pack(side="right", expand=True, fill="both")
+        self.container.pack(expand=True, fill="both", padx=5, pady=5)
+        self.box1.pack(expand=True, fill="both", padx=10, pady=10)
+        self.box2.pack(expand=True, fill="both", padx=10, pady=10)
+
+        self.map_field.pack()
+        self.chatlog.pack()
+        self.command_field.pack()
+        self.act_button.pack()
+        self.current_time.pack()
 
         def cycle():
-            current_time.config(text="Current Time: " + time_to_date(self.cur_world.time))
-            map_field.itemconfigure(map_bg, text=self.cur_world.world_to_string())
-            chatlog.itemconfigure(chat, text=log)
+            self.current_time.config(text="Current Time: " + time_to_date(self.cur_world.time))
+            self.map_field.itemconfigure(self.map_bg, text=self.cur_world.world_to_string())
+            self.chatlog.itemconfigure(self.chat, text=log)
             self.wind.after(1, cycle)
 
         cycle()
 
         self.wind.mainloop()
 
-prepare_lists()
 
-The_Map = World(1) # World initiation on z = 1.
+def main():
+    prepare_lists()
 
-"""Tall_Grass(The_Map, 27, 24)
-Tall_Grass(The_Map, 29, 25)
-Tall_Grass(The_Map, 27, 24)
-Tall_Grass(The_Map, 29, 25)
-Tall_Grass(The_Map, 28, 26)
-Tall_Grass(The_Map, 28, 26)
-Forest(The_Map, 27, 24)
-City(The_Map, 28, 25)
-Mountain(The_Map, 29, 26)
-Iron_Deposit(The_Map, 29, 26)
-Gold_Deposit(The_Map, 29, 26)"""
+    The_Map = World(1)  # World initiation on z = 1.
 
-threading.Thread(target=master_controller).start() # Controller start up.
+    Tall_Grass(The_Map, 27, 24)
+    Tall_Grass(The_Map, 29, 25)
+    Tall_Grass(The_Map, 27, 24)
+    Tall_Grass(The_Map, 29, 25)
+    Tall_Grass(The_Map, 28, 26)
+    Tall_Grass(The_Map, 28, 26)
+    Forest(The_Map, 27, 24)
+    City(The_Map, 28, 25)
+    Mountain(The_Map, 29, 26)
+    Iron_Deposit(The_Map, 29, 26)
+    Gold_Deposit(The_Map, 29, 26)
 
-GUI = Game_Window(The_Map) # Opening the gui window.
+    threading.Thread(target=master_controller).start()  # Controller start up.
+
+    GUI = Game_Window(The_Map)  # Opening the gui window.
+
+main()
