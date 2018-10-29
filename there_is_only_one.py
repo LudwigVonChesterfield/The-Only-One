@@ -523,6 +523,10 @@ class Atom:
     def get_task(self, city):
         return None  # If this returns None, consider skipping trying to get task from this.
 
+    def react_to_attack(self, attacker):
+        """Returns True if attack was parried, False otherwise."""
+        return False
+
     def qdel(self):
         self.qdeling = True
         if(self in atoms):
@@ -643,6 +647,14 @@ class Fire(Object):
     def spread_to(self, x, y):
         Fire(self.world, x, y, self.integrity)
 
+    def get_task(self, city):
+        return {"priority" : 1, "job" : "Peasant", "task" : "destroy", "target" : self, "allowed_peasants" : True}
+
+    def react_to_attack(self, attacker):
+        if(prob(10)):
+            attacker.fire_act(1)
+
+
 class Resource(Object):
     harvestable = False
     allow_peasants = False
@@ -655,7 +667,7 @@ class Resource(Object):
     def __init__(self, loc, x, y):
         super().__init__(loc, x, y)
         self.been_used = False
-        self.resource_multiplier = random.uniform(1.0, 1.5)
+        self.resource_multiplier = random.uniform(0.7, 1.3)
         self.resourcefulness = self.get_max_resourcefulness()
 
     def get_max_resourcefulness(self):
@@ -678,7 +690,8 @@ class Resource(Object):
         if(prob(harvester.loc.action_time)):
             severity = 0
             if(self.resourcefulness > amount * harvester.action_time):
-                severity = int(round(self.resourcefulness / (self.resourcefulness - (amount * harvester.loc.action_time))))
+                # The 0.0001 is there to prevent zeroDivision errors.
+                severity = int(round(self.resourcefulness / (0.0001 + self.resourcefulness - (amount * harvester.loc.action_time))))
             else:
                 severity = self.integrity
             self.crumble(severity)
@@ -688,7 +701,7 @@ class Resource(Object):
         if(not super().crumble(severity)):
             self.resourcefulness = min([self.resourcefulness, self.get_max_resourcefulness()])
             if(self.resourcefulness <= 0):
-                qdel(self)
+                self.qdel()
                 del self
                 return True  # We have crumbled due to lack of resource.
             return False
@@ -794,7 +807,7 @@ class Tool(Object):
         self.y = y
         self.loc = loc
         self.materials = materials
-        self.quality = random.uniform(2.5, 3.5) * quality_modifier
+        self.quality = random.uniform(2.0, 3.0) * quality_modifier
 
     def qdel(self):
         self.qdeling = True
@@ -919,7 +932,7 @@ class City(Object):
         food_required = len(self.citizens)
         food_supply = 0
 
-        strucs = self.world.get_region_contents(self.x, self.y, 1, 1)
+        strucs = self.world.get_region_contents(self.x, self.y, 2, 2)
         random.shuffle(strucs)
 
         dummy = random.choice(self.citizens)
@@ -1015,14 +1028,14 @@ class City(Object):
                         break
             cur_priority = cur_priority + 1
 
-        if(len(self.citizens) > 99):
+        if(len(self.citizens) > 30):
             cit = Citizens(self.loc, self.x, self.y, self.faction)
             cit.resources["food"] = 0
             for c in range(5):
                 cit.add_citizen(Peasant)
                 self.remove_citizen(None)
 
-        if(self.resources["food"] > 30 and food_supply > len(self.citizens) and len(self.citizens) <= self.max_population):
+        if(self.resources["food"] > 30 and food_supply - 1 > len(self.citizens) and len(self.citizens) < self.max_population):
             self.resources["food"] -= 30
             self.add_citizen(Peasant)
 
@@ -1104,8 +1117,11 @@ class City(Object):
 
     def fire_act(self, severity):
         for cit in range(severity):
-            self.remove_citizen(None)
-            return True
+            citizen = random.choice(citizens)
+            if(not citizen.qdeling):
+                citizen.fire_act(severity)
+                return True
+        return False
 
 class Structure(Resource): #Only one per tile.
     size = 5
@@ -1195,15 +1211,17 @@ class Citizen(Mob):
         self.display_name = self.name + " " + str(random.randrange(1, 999))
         self.actions_to_perform = self.max_actions_to_perform
 
+        self.max_health = random.randrange(1, 3)
+        self.health = self.max_health
         self.age = 0
 
         self.max_saturation = random.randrange(50, 100)
         self.saturation = self.max_saturation
-        self.hunger_rate = random.uniform(0.5, 1.0)
+        self.hunger_rate = random.uniform(0.7, 1.3)
         self.malnutrition = 0
 
         self.qdeling = False
-        self.quality_modifier = random.uniform(0.9, 1.1)
+        self.quality_modifier = random.uniform(0.7, 1.3)
         self.tool = None
 
     def life(self):
@@ -1220,17 +1238,18 @@ class Citizen(Mob):
                 return False
 
         if(self.saturation == 0):
-            self.malnutrition = self.malnutrition + 1 + (self.age // 8760) # Age in years.
+            self.malnutrition += 1 + (self.age // 8760) # Age in years.
             if(prob(self.malnutrition)):
-                self.loc.remove_citizen(self)
+                self.crumble(self.malnutrition)
                 return False # Dead. Gray dead.
 
         if(prob(self.age // 8760)): # Sometimes they just die.
-            self.loc.remove_citizen(self)
+            self.crumble(self.age // 87600)
             return False
 
-        elif(self.malnutrition > 0):
-            self.manlutrition = max([self.malnutrition - round(self.max_saturation // (self.saturation + 1)), 0])
+        if(self.malnutrition > 0):
+            self.malnutrition = max([self.malnutrition - round(self.max_saturation // (self.saturation + 0.0001)), 0])
+
         return True # If it didn't die this iteration.
 
     def qdel(self):
@@ -1270,6 +1289,8 @@ class Citizen(Mob):
             return False
         elif(task["task"] == "rest"):
             return self.rest(task["target"])
+        elif(task["task"] == "destroy"):
+            return self.destroy(task["target"])
         return False
 
     def create(self, resources_required, item_type):
@@ -1314,7 +1335,30 @@ class Citizen(Mob):
             return False
         else:
             self.actions_to_perform = min([self.actions_to_perform + 2, self.max_actions_to_perform])
+            self.health = min([self.health + 1, self.max_health])
             return True
+
+    def destroy(self, target):
+        damage_to_do = round(self.actions_to_perform + (self.max_saturation // (self.saturation + 0.0001)) - (self.malnutrition // 100) - (self.age // 87600))
+        if(damage_to_do >= 1):
+            if(not target.react_to_attack(self)):
+                target.crumble(int(damage_to_do))
+                self.actions_to_perform -= int(damage_to_do)  # Hitting hard takes more effort.
+                return True
+        return False
+
+    def crumble(self, severity):
+        self.health = self.health - severity
+        if(self.health <= 0):
+            self.qdeling = True
+            self.loc.remove_citizen(self)
+            del self
+            return True # Fully crumbled.
+        return False
+
+    def fire_act(self, severity):
+        crumble(severity)
+        return False  # I mean, you can't spread fire by just the Citizen. Neither you really could.
 
 
     def required_citizens(self, strucs):
@@ -1526,11 +1570,13 @@ class Citizens(Mob):
         self.handle_ai_movement()
 
         self.size = int(len(self.citizens) // 10)
+
         if(self.world.is_overcrowded(self.x, self.y, 0)):
             for struc in self.world.get_tile_contents(self.x, self.y):
                 if(struc == self):
                     continue
-                struc.crumble(self.size)
+                if(struc.crumble(self.size)):
+                    return
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
@@ -1632,8 +1678,11 @@ class Citizens(Mob):
 
     def fire_act(self, severity):
         for cit in range(severity):
-            self.remove_citizen(None)
-        return True
+            citizen = random.choice(citizens)
+            if(not citizen.qdeling):
+                citizen.fire_act(severity)
+                return True
+        return False
 
 chosen_object = None # The object player currently is interacting with.
 
