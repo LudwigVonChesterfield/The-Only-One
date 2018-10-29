@@ -1014,7 +1014,7 @@ class City(Object):
                 for citizen in cits:
                     if(citizen.qdeling):
                         continue
-                    if(citizen.actions_to_perform <= 0 and prob(citizen.age // 8760)):  # The older the person, the less he'd want to overwork.
+                    if(citizen.actions_to_perform <= 0 and prob(round((citizen.age / 8760) * abs(citizen.actions_to_perform)))):  # The older the person, the less he'd want to overwork.
                         continue
                     if(citizen.actions_to_perform <= -citizen.max_actions_to_perform):  # See: citizens overworking themselves to death.
                         continue
@@ -1154,7 +1154,7 @@ class Construction(Structure):
 class House(Structure):
     symbol = "h"
     name = "House"
-    work_required = 15
+    work_required = 20
 
     def get_task(self, city):
         return {"priority" : 5, "job" : "Peasant", "task" : "rest", "target" : self, "allowed_peasants" : True}
@@ -1166,7 +1166,7 @@ class House(Structure):
 class Farm(Structure):
     symbol = "w"
     name = "Farm"
-    work_required = 10
+    work_required = 15
 
     harvestable = True
     allow_peasants = False
@@ -1184,7 +1184,7 @@ class Farm(Structure):
 class Mine(Structure):
     symbol = "m"
     name = "Mine"
-    work_required = 20
+    work_required = 25
 
     harvestable = True
     allow_peasants = False
