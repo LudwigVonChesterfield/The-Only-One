@@ -182,6 +182,9 @@ class World:
         for struc in strucs:
             show = show + struc.symbol + "[" + str(struc.priority) + "]\n"
 
+        GUI.showing_turf_rel_x = int(round(x_ * GUI.pixels_per_tile))
+        GUI.showing_turf_rel_y = int(round(y_ * GUI.pixels_per_tile))
+
         if(GUI.showing_turf):
             GUI.showing_turf_strucs = strucs
             wid = int(round(4 * GUI.pixels_per_tile))
@@ -189,11 +192,18 @@ class World:
             GUI.showing_turf.configure(width=wid, height=hei)
             GUI.showing_turf.coords(GUI.showing_turf_content, int(round(wid // 2)), int(round(hei // 2)))
             GUI.showing_turf.itemconfigure(GUI.showing_turf_content, text=show)
+            GUI.showing_turf.lift(GUI)
+            GUI.showing_turf.master.geometry("+%d+%d" % (GUI.wind.winfo_x() + GUI.showing_turf_rel_x, GUI.wind.winfo_y() + GUI.showing_turf_rel_y))
             return
 
         temp_wind = tkinter.Toplevel(GUI.wind)
         temp_wind.title(u'The Tile')
         temp_wind.resizable(False, False)
+        temp_wind.geometry("+%d+%d" % (GUI.wind.winfo_x() + GUI.showing_turf_rel_x, GUI.wind.winfo_y() + GUI.showing_turf_rel_y))
+        temp_wind.attributes("-topmost", True)
+
+        wid = int(round(4 * GUI.pixels_per_tile))
+        hei = int(round(len(strucs) * 3 * GUI.pixels_per_tile))
 
         def on_close():
             GUI.showing_turf = None
@@ -202,9 +212,6 @@ class World:
             temp_wind.destroy()
 
         temp_wind.protocol("WM_DELETE_WINDOW", on_close)
-
-        wid = int(round(4 * GUI.pixels_per_tile))
-        hei = int(round(len(strucs) * 3 * GUI.pixels_per_tile))
 
         def on_click(event):
             """Try-hard hack to make these objects clickable."""
@@ -1068,14 +1075,14 @@ class City(Object):
                 if(struc == self):
                     continue
                 struc.crumble(self.size)
-        print(self.display_name)
+        #print(self.display_name)
         #print(self.faction.display_name)
-        print(self.resources)
+        #print(self.resources)
         #print(self.inventory)
         l = ""
         for cit in self.citizens:
             l = l + cit.display_name + " "
-        print(l)
+        #print(l)
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
@@ -1363,7 +1370,7 @@ class Citizen(Mob):
 
     def required_citizens(self, strucs):
         requests = {"Peasant" : 0,
-                    "Builder" : 1,
+                    "Builder" : 1 + len(self.loc.citizens) // 10,
                     "Farmer" : 0,
                     "Miner" : 0,
                     "Stonecutter" : 1,
@@ -1696,6 +1703,8 @@ class Game_Window:
         self.showing_turf = None  # Is set to the showing turf window upon showing the turf.
         self.showing_turf_content = None
         self.showing_turf_strucs = []
+        self.showing_turf_rel_x = 0
+        self.showing_turf_rel_y = 0
 
         self.pixels_per_tile = self.default_pixels_per_tile
 
@@ -1706,6 +1715,7 @@ class Game_Window:
         self.wind = tkinter.Tk()
         self.wind.title(u'The Game')
         self.wind.resizable(False, False)
+        self.wind.bind("<Configure>", self.move_me)
 
         self.left = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
         self.right = tkinter.Frame(self.wind, borderwidth=2, relief="solid")
@@ -1756,7 +1766,7 @@ class Game_Window:
                     to_sleep_chance = 100
                     return
 
-                to_sleep_chance = max([0, to_sleep_chance - 10])
+                to_sleep_chance = max([1, to_sleep_chance - 10])
 
             elif(args[0] == "Slower"):
                 if(to_sleep_chance == 100):
@@ -1790,6 +1800,14 @@ class Game_Window:
         cycle()
 
         self.wind.mainloop()
+
+    def move_me(self, event):
+        """GUI func called, when the window moves."""
+        if(self.showing_turf != None):
+            x_temp = self.wind.winfo_x() + self.showing_turf_rel_x
+            y_temp = self.wind.winfo_y() + self.showing_turf_rel_y
+            self.showing_turf.master.geometry("+%d+%d" % (x_temp, y_temp))
+
 
 
 def main():
