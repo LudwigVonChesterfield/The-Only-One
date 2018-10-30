@@ -13,6 +13,7 @@ log = ""
 sqrt_2 = math.sqrt(2)
 runtime = True
 to_sleep_chance = 10
+freeze_time = False
 atoms_by_name = {}
 
 def time_to_date(time): # Time is in hours.
@@ -113,6 +114,8 @@ def get_vector(x1, x2):
 
 def master_controller():
     while(runtime):
+        if(freeze_time):
+            continue
         for world in worlds:
             if(world.initiated):
                 if(world.processing):
@@ -182,6 +185,13 @@ class World:
         for struc in strucs:
             show = show + struc.symbol + "[" + str(struc.priority) + "]\n"
 
+        def on_click(event):
+            """Try-hard hack to make these objects clickable."""
+            y_ = int(round(event.y / (3 * GUI.pixels_per_tile)))
+            if(y_ >= 0 and y_ < len(GUI.showing_turf_strucs)):
+                atom = GUI.showing_turf_strucs[y_]
+                atom.ClickedOn(GUI, atom.x, atom.y)  # Cheap hack to get at least some x and y to be passed.
+
         GUI.showing_turf_rel_x = int(round(x_ * GUI.pixels_per_tile))
         GUI.showing_turf_rel_y = int(round(y_ * GUI.pixels_per_tile))
 
@@ -190,7 +200,7 @@ class World:
             wid = int(round(4 * GUI.pixels_per_tile))
             hei = int(round(len(strucs) * 3 * GUI.pixels_per_tile))
             GUI.showing_turf.configure(width=wid, height=hei)
-            GUI.showing_turf.coords(GUI.showing_turf_content, int(round(wid // 2)), int(round(hei // 2)))
+            GUI.showing_turf.coords(GUI.showing_turf_content, int(round(wid / 2)), int(round(hei / 2)))
             GUI.showing_turf.itemconfigure(GUI.showing_turf_content, text=show)
             GUI.showing_turf.lift(GUI)
             GUI.showing_turf.master.geometry("+%d+%d" % (GUI.wind.winfo_x() + GUI.showing_turf_rel_x, GUI.wind.winfo_y() + GUI.showing_turf_rel_y))
@@ -213,17 +223,9 @@ class World:
 
         temp_wind.protocol("WM_DELETE_WINDOW", on_close)
 
-        def on_click(event):
-            """Try-hard hack to make these objects clickable."""
-            y_ = int(round(event.y // (3 * GUI.pixels_per_tile)))
-            if(y_ >= 0 and y_ < len(GUI.showing_turf_strucs)):
-                atom = GUI.showing_turf_strucs[y_]
-                atom.ClickedOn(GUI, atom.x, atom.y)  # Cheap hack to get at least some x and y to be passed.
-
-
         temp_map_field = tkinter.Canvas(temp_wind, width=wid, height=hei, bg='black')
         temp_map_field.bind("<ButtonPress-1>", on_click)
-        temp_map_bg = temp_map_field.create_text(int(round(wid // 2)), int(round(hei // 2)), text=show, fill = 'green', font = 'TkFixedFont')
+        temp_map_bg = temp_map_field.create_text(int(round(wid / 2)), int(round(hei / 2)), text=show, fill = 'green', font = 'TkFixedFont')
 
         GUI.showing_turf = temp_map_field
         GUI.showing_turf_content = temp_map_bg
@@ -479,7 +481,8 @@ class Atom:
                 if(struc == self):
                     continue
                 if(overcrowded):
-                    struc.crumble(self.size)
+                    if(struc.crumble(self.size)):
+                        continue
                 struc.bump(self)
                 self.bump_into(struc)
             world.map_c[x_y_to_coord(x, y)].append(self)
@@ -662,6 +665,29 @@ class Fire(Object):
             attacker.fire_act(1)
 
 
+class Lightning(Object):
+    symbol = "z"
+    name = "Lightning"
+    default_description = "It is before the Thunder."
+    size = 1
+    priority = 100  # Pretty "light".
+
+    def __init__(self, loc, x, y, power=3):
+        super().__init__(loc, x, y)
+        coords = self.world.get_region_coordinates(self.x, self.y, 1, 1)
+        random.shuffle(coords)
+        for coord in coords:
+            coord = coord_to_list(coord)
+            x_ = coord["x"]
+            y_ = coord["y"]
+            strucs = self.world.get_tile_contents(x_, y_)
+            if(x_ == self.x and y_ == self.y):
+                Fire(self.world, x, y, power)
+                continue
+            for struc in strucs:
+                struc.fire_act(power)
+        self.qdel()
+
 class Resource(Object):
     harvestable = False
     allow_peasants = False
@@ -669,16 +695,17 @@ class Resource(Object):
     job_to_harvest = ""
     harv_priority = 0
 
+    default_resource_multiplier = 1.0
     def_amount = 0
 
     def __init__(self, loc, x, y):
         super().__init__(loc, x, y)
         self.been_used = False
-        self.resource_multiplier = random.uniform(0.7, 1.3)
+        self.resource_multiplier = random.uniform(0.8, 1.2) * self.default_resource_multiplier
         self.resourcefulness = self.get_max_resourcefulness()
 
     def get_max_resourcefulness(self):
-        return int(round(self.def_amount * self.resource_multiplier * self.integrity * random.uniform(0.9, 1.1)))
+        return int(round(self.def_amount * self.resource_multiplier * self.integrity))
 
     def get_task(self, city):
         if(self.harvestable):
@@ -936,7 +963,10 @@ class City(Object):
         return False
 
     def process(self):
-        food_required = len(self.citizens)
+        food_required = 0
+        for cit in self.citizens:
+            food_required += cit.hunger_rate
+        actual_food_required = food_required
         food_supply = 0
 
         strucs = self.world.get_region_contents(self.x, self.y, 2, 2)
@@ -954,19 +984,19 @@ class City(Object):
                 continue
 
             if(isinstance(struc, Resource) and struc.resource):
-                if(self.resources[struc.resource] >= 500):  # We have enough of this...
+                if(self.resources[struc.resource] >= 50 * len(self.citizens)):  # We have enough of this...
                     continue
 
             if(isinstance(struc, Tall_Grass)):
-                food_supply = food_supply + 1
+                food_supply += struc.resource_multiplier * struc.default_resource_multiplier
                 if(food_required > 0):
-                    food_required = food_required - 1
+                    food_required -= struc.resource_multiplier * struc.default_resource_multiplier
                 else:  # If we have enough food, stop getting it.
                     continue
             if(isinstance(struc, Farm)):
-                food_supply = food_supply + 3
+                food_supply += struc.resource_multiplier * struc.default_resource_multiplier
                 if(food_required > 0):
-                    food_required = food_required - 3
+                    food_required -= struc.resource_multiplier * struc.default_resource_multiplier
                 else:  # If we have enough food, stop getting it.
                     continue
 
@@ -975,7 +1005,7 @@ class City(Object):
         for job_request in self.job_requests:
             if(job_request == "Farmer"):
                 for task in range(0, self.job_requests[job_request]):
-                    self.tasks.append({"priority" : 2, "job" : "Carpenter", "task" : "create", "target" : Hoe, "res_required" : {"wood" : 5}, "allowed_peasants" : False})
+                    self.tasks.append({"priority" : 1, "job" : "Carpenter", "task" : "create", "target" : Hoe, "res_required" : {"wood" : 5}, "allowed_peasants" : False})
             elif(job_request == "Builder"):
                 for task in range(0, self.job_requests[job_request]):
                     self.tasks.append({"priority" : 2, "job" : "Carpenter", "task" : "create", "target" : Hammer, "res_required" : {"wood" : 5}, "allowed_peasants" : False})
@@ -1001,7 +1031,7 @@ class City(Object):
         for structure_request in self.structure_requests:
             if(structure_request == "Farm"):
                 for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 2, "job" : "Builder", "task" : "build", "target" : Farm, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
+                    self.tasks.append({"priority" : 1, "job" : "Builder", "task" : "build", "target" : Farm, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
             elif(structure_request == "Mine"):
                 for task in range(0, self.structure_requests[structure_request]):
                     self.tasks.append({"priority" : 3, "job" : "Builder", "task" : "build", "target" : Mine, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
@@ -1009,11 +1039,13 @@ class City(Object):
                 for task in range(0, self.structure_requests[structure_request]):
                     self.tasks.append({"priority" : 3, "job" : "Builder", "task" : "build", "target" : House, "res_required" : {"wood" : 30, "stone" : 30}, "allowed_peasants" : False})
 
+        actual_food_supply = 0
         cur_priority = 1
         while(cur_priority <= 10):
             tasks = self.get_priority_tasks_list(cur_priority)
             if(not tasks):
                 cur_priority = cur_priority + 1
+                continue
             for task in tasks:
                 cits = self.get_susceptible_citizens_list(task)
                 if(not cits):
@@ -1021,16 +1053,18 @@ class City(Object):
                 for citizen in cits:
                     if(citizen.qdeling):
                         continue
+                    if(isinstance(citizen, Toddler)):  # Toddlers don't even try to work.
+                        continue
                     if(citizen.actions_to_perform <= 0 and prob(round((citizen.age / 8760) * abs(citizen.actions_to_perform)))):  # The older the person, the less he'd want to overwork.
                         continue
                     if(citizen.actions_to_perform <= -citizen.max_actions_to_perform):  # See: citizens overworking themselves to death.
                         continue
-                    if(prob(citizen.age) // 8760): # Old people just tend to refuse to work sometimes.
-                        continue
                     #print(citizen.display_name + " is trying to perform " + str(task))
                     #print("Has actions left: " + str(citizen.actions_to_perform))
                     if(citizen.perform_task(strucs, task)):
-                        #print(citizen.display_name + " has succesfully performed above task")
+                        print(citizen.display_name + " performed " + str(task))
+                        if(isinstance(task["target"], Resource) and task["target"].resource == "food"):
+                            actual_food_supply += task["target"].resource_multiplier * task["target"].default_resource_multiplier
                         self.tasks.remove(task)
                         break
             cur_priority = cur_priority + 1
@@ -1042,14 +1076,13 @@ class City(Object):
                 cit.add_citizen(Peasant)
                 self.remove_citizen(None)
 
-        if(self.resources["food"] > 30 and food_supply - 1 > len(self.citizens) and len(self.citizens) < self.max_population):
-            self.resources["food"] -= 30
-            self.add_citizen(Peasant)
+        if(self.resources["food"] > 30 and actual_food_supply - 1 > actual_food_required and len(self.citizens) < self.max_population):
+            self.add_citizen(Toddler)
 
         for citizen in self.citizens:
             if(not citizen.qdeling):
-                if(citizen.life()):
-                    citizen.try_equip() # Even old people steal tools.
+                if(citizen.life() and not citizen.qdeling):
+                    citizen.try_equip()  # Even old people steal tools.
 
         houses_count = 0
         for struc in strucs:
@@ -1074,15 +1107,16 @@ class City(Object):
             for struc in self.world.get_tile_contents(self.x, self.y):
                 if(struc == self):
                     continue
-                struc.crumble(self.size)
-        #print(self.display_name)
+                if(struc.crumble(self.size)):
+                    continue
+        print(self.display_name)
         #print(self.faction.display_name)
-        #print(self.resources)
-        #print(self.inventory)
+        print(self.resources)
+        print(self.inventory)
         l = ""
         for cit in self.citizens:
             l = l + cit.display_name + " "
-        #print(l)
+        print(l)
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
@@ -1124,7 +1158,9 @@ class City(Object):
 
     def fire_act(self, severity):
         for cit in range(severity):
-            citizen = random.choice(citizens)
+            if(not len(self.citizens)):
+                return False
+            citizen = random.choice(self.citizens)
             if(not citizen.qdeling):
                 citizen.fire_act(severity)
                 return True
@@ -1161,7 +1197,7 @@ class Construction(Structure):
 class House(Structure):
     symbol = "h"
     name = "House"
-    work_required = 20
+    work_required = 15
 
     def get_task(self, city):
         return {"priority" : 5, "job" : "Peasant", "task" : "rest", "target" : self, "allowed_peasants" : True}
@@ -1173,7 +1209,7 @@ class House(Structure):
 class Farm(Structure):
     symbol = "w"
     name = "Farm"
-    work_required = 15
+    work_required = 10
 
     harvestable = True
     allow_peasants = False
@@ -1181,6 +1217,7 @@ class Farm(Structure):
     job_to_harvest = "Farmer"
     harv_priority = 1
 
+    default_resource_multiplier = 1.3
     def_amount = 100
 
     def fire_act(self, severity):
@@ -1191,18 +1228,17 @@ class Farm(Structure):
 class Mine(Structure):
     symbol = "m"
     name = "Mine"
-    work_required = 25
+    work_required = 20
 
     harvestable = True
     allow_peasants = False
     resource = "stone"
     job_to_harvest = "Miner"
-    harv_priority = 4
+    harv_priority = 5
 
+    default_resource_multiplier = 1.3
     def_amount = 100
 
-    def get_task(self, city):
-        return {"priority" : 5, "job" : "Miner", "task" : "harvest", "target" : self, "allowed_peasants" : False}
 
 #Mobs.
 class Citizen(Mob):
@@ -1218,30 +1254,32 @@ class Citizen(Mob):
         self.display_name = self.name + " " + str(random.randrange(1, 999))
         self.actions_to_perform = self.max_actions_to_perform
 
-        self.max_health = random.randrange(1, 3)
+        self.max_health = random.randrange(2, 4)
         self.health = self.max_health
-        self.age = 0
+        self.age = 8760  # At least one year.
 
         self.max_saturation = random.randrange(50, 100)
         self.saturation = self.max_saturation
-        self.hunger_rate = random.uniform(0.7, 1.3)
+        self.hunger_rate = random.uniform(0.8, 1.2)
         self.malnutrition = 0
 
         self.qdeling = False
-        self.quality_modifier = random.uniform(0.7, 1.3)
+        self.quality_modifier = random.uniform(0.8, 1.2)
         self.tool = None
 
     def life(self):
-        self.actions_to_perform += 1
+        self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
+        if(prob(self.health)):  # A healthy spirit in a healthy body.
+            self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
         self.saturation = max(self.saturation - round(self.hunger_rate * self.loc.action_time), 0)
         to_grab = min([self.max_saturation - self.saturation, self.loc.resources["food"]])
         self.loc.resources["food"] = max([self.loc.resources["food"] - to_grab, 0])
         self.saturation = self.saturation + to_grab
-        self.age = self.age + self.loc.action_time
+        self.age_by(self.loc.action_time)
 
         if(self.actions_to_perform <= 0):  # OVERWORKING: Citizens can work more than they should, but they will die quicker.
-            if(prob((self.age // 8760) * abs(self.actions_to_perform))):
-                self.loc.remove_citizen(self)
+            if(prob(round((self.age / 8760) * abs(self.actions_to_perform)))):
+                self.crumble(abs(self.actions_to_perform))
                 return False
 
         if(self.saturation == 0):
@@ -1255,9 +1293,14 @@ class Citizen(Mob):
             return False
 
         if(self.malnutrition > 0):
-            self.malnutrition = max([self.malnutrition - round(self.max_saturation // (self.saturation + 0.0001)), 0])
+            self.malnutrition = max([self.malnutrition - round(self.saturation / (self.max_saturation + 0.0001)), 0])
 
         return True # If it didn't die this iteration.
+
+    def age_by(self, time):
+        if(prob(time)):  # Special actions ensue.
+            self.quality_modifier += 0.1
+        self.age += time  # Normal behavior.
 
     def qdel(self):
         self.qdeling = True
@@ -1273,9 +1316,6 @@ class Citizen(Mob):
         del self
 
     def perform_task(self, strucs, task):
-        if(prob(self.age // 8760)): # They die twice as much if they are working.
-            self.loc.remove_citizen(self)
-            return False
         if(task["task"] == "harvest"):
             return self.harvest(task["target"])
         elif(task["task"] == "create"):
@@ -1346,7 +1386,7 @@ class Citizen(Mob):
             return True
 
     def destroy(self, target):
-        damage_to_do = round(self.actions_to_perform + (self.max_saturation // (self.saturation + 0.0001)) - (self.malnutrition // 100) - (self.age // 87600))
+        damage_to_do = round(self.actions_to_perform + (self.max_saturation / (self.saturation + 0.0001)) - (self.malnutrition // 100) - (self.age // 87600))
         if(damage_to_do >= 1):
             if(not target.react_to_attack(self)):
                 target.crumble(int(damage_to_do))
@@ -1364,20 +1404,21 @@ class Citizen(Mob):
         return False
 
     def fire_act(self, severity):
-        crumble(severity)
+        self.crumble(severity)
         return False  # I mean, you can't spread fire by just the Citizen. Neither you really could.
 
 
     def required_citizens(self, strucs):
         requests = {"Peasant" : 0,
-                    "Builder" : 1 + len(self.loc.citizens) // 10,
+                    "Builder" : 1 + (len(self.loc.citizens) // 10),
                     "Farmer" : 0,
                     "Miner" : 0,
-                    "Stonecutter" : 1,
+                    "Stonecutter" : (len(self.loc.citizens) // 10),
                     "Blacksmith" : 0,
                     "Weaponsmith" : 0,
                     "Lumberjack" : 0,
-                    "Carpenter" : 1}
+                    "Carpenter" : 1,
+                    "Toddler" : 0}
         for struc in strucs:
             if(isinstance(struc, Farm)):
                 requests["Farmer"] = requests["Farmer"] + 1
@@ -1403,8 +1444,7 @@ class Citizen(Mob):
             if(isinstance(struc, Rocky)):
                 requests["Mine"] = requests["Mine"] + 1
         requests["Farm"] = requests["Farm"] + round(len(self.loc.citizens) / 3)
-        #print(str(requests["Farm"]) + " is estimated required farm number")
-        requests["House"] = requests["House"] + (round(self.loc.max_population - len(self.loc.citizens)) == 0)
+        requests["House"] = requests["House"] + int(round(self.loc.max_population - len(self.loc.citizens)) == 0)
         return requests
 
     def get_citizen_count(self, citizen_name):
@@ -1466,6 +1506,49 @@ class Citizen(Mob):
                     self.loc.inventory.append(self.tool)
                 self.tool = tool
                 self.loc.inventory.remove(self.tool)
+
+class Toddler(Citizen):
+    symbol = "t"
+    name = "Toddler"
+
+    def __init__(self, loc, x, y):
+        super().__init__(loc, x, y)
+        self.age = 0  # Since citizen is set to 8760.
+
+        self.max_health = 1
+        self.health = self.max_health
+
+        self.max_saturation = random.randrange(10, 20)
+        self.saturation = self.max_saturation
+        self.hunger_rate = random.uniform(0.2, 0.3)
+
+    def perform_task(self, strucs, task):
+        return False  # Toddlers do no work.
+
+    def become_job(self, job):
+        return False
+
+    def life(self):
+        if(not super().life()):
+            return False
+
+        if((self.age / 8760) >= 1):
+            self.become_adult()
+        return True
+
+    def become_adult(self):
+        # Read somewhere above about the -2 -2.
+        peasant = Peasant(self.loc, -2, -2)
+        self.loc.citizens.append(peasant)
+        peasant.try_equip()
+        peasant.health = self.health
+        peasant.age = self.age
+
+        peasant.saturation = self.saturation
+        peasant.malnutrition = self.malnutrition
+
+        peasant.quality_modifier = self.quality_modifier
+        self.loc.remove_citizen(self)
 
 class Peasant(Citizen):
     symbol = "p"
@@ -1564,7 +1647,7 @@ class Citizens(Mob):
     def life(self):
         if(self.resources["food"] > 100):
             self.resources["food"] = max([self.resources["food"] - 50, 0])
-            self.add_citizen(Peasant)
+            self.add_citizen(Toddler)
 
         for citizen in self.citizens:
             if(not citizen.qdeling):
@@ -1591,10 +1674,6 @@ class Citizens(Mob):
         citizen.try_equip()
 
     def remove_citizen(self, citizen_):
-        for citizen in self.citizens:
-            if(citizen.loc == None):
-                citizen.qdel()
-                del citizen
         if(citizen_):
             citizen_.qdel()
             del citizen_
@@ -1685,7 +1764,9 @@ class Citizens(Mob):
 
     def fire_act(self, severity):
         for cit in range(severity):
-            citizen = random.choice(citizens)
+            if(not len(self.citizens)):
+                return False
+            citizen = random.choice(self.citizens)
             if(not citizen.qdeling):
                 citizen.fire_act(severity)
                 return True
@@ -1730,17 +1811,18 @@ class Game_Window:
 
         self.map_field = tkinter.Canvas(self.container, width=self.wind_wid, height=self.wind_hei, bg='black')
         self.map_field.bind("<ButtonPress-1>", on_click)
-        self.map_bg = self.map_field.create_text(int(round(self.wind_wid // 2)), int(round(self.wind_hei // 2)), text=self.cur_world.world_to_string(), fill = 'green', font = 'TkFixedFont')
-        self.chatlog = tkinter.Canvas(self.box1, width=int(round(self.wind_wid // 2)), height=self.wind_hei, bg = 'dark blue')
-        self.chat = self.chatlog.create_text(int(round(self.wind_wid // 4)), int(round(self.wind_hei // 2)), width = int(round(self.wind_wid // 2)),text=log, fill = 'white', font = 'TkFixedFont 12')
+        self.map_bg = self.map_field.create_text(int(round(self.wind_wid / 2)), int(round(self.wind_hei / 2)), text=self.cur_world.world_to_string(), fill = 'green', font = 'TkFixedFont')
+        self.chatlog = tkinter.Canvas(self.box1, width=int(round(self.wind_wid / 2)), height=self.wind_hei, bg = 'dark blue')
+        self.chat = self.chatlog.create_text(int(round(self.wind_wid / 4)), int(round(self.wind_hei / 2)), width = int(round(self.wind_wid / 2)), text=log, fill = 'white', font = 'TkFixedFont 12')
         # Since it uses TkFixedFont 12, we divide by 12. Almost makes sense.
-        self.chat_lenght = int(round(self.wind_wid // 48))
+        self.chat_lenght = int(round(self.wind_wid / 48))
 
-        self.command_field = tkinter.Entry(self.left, width=int(round(self.wind_wid // 8)))
+        self.command_field = tkinter.Entry(self.left, width=int(round(self.wind_wid / 8)))
         self.command_field.focus_set()
 
         def action():
             global to_sleep_chance
+            global freeze_time
             command = self.command_field.get()
             args = command.split()
 
@@ -1758,11 +1840,11 @@ class Game_Window:
                 self.cur_world.show_turf(self, int(args[1]), int(args[2]))
 
             elif(args[0] == "Stop"):
-                self.cur_world.processing = False
+                freeze_time = True
 
             elif(args[0] == "Faster"):
                 if(not self.cur_world.processing):
-                    self.cur_world.processing = True
+                    freeze_time = False
                     to_sleep_chance = 100
                     return
 
@@ -1770,7 +1852,7 @@ class Game_Window:
 
             elif(args[0] == "Slower"):
                 if(to_sleep_chance == 100):
-                    self.cur_world.processing = False
+                    freeze_time = True
                     return
 
                 to_sleep_chance = min([100, to_sleep_chance + 10])
