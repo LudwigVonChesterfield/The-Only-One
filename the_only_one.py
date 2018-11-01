@@ -161,6 +161,7 @@ class World:
     processing = False
     process_atoms = []
     time = 0
+    GUIs = []
 
     def __init__(self, z):
         self.z = z
@@ -183,7 +184,7 @@ class World:
             return  # Nothing to see.
         show = ""
         for struc in strucs:
-            show = show + struc.symbol + "[" + str(struc.priority) + "]\n"
+            show = show + struc.icon_symbol + "[" + str(struc.priority) + "]\n"
 
         def on_click(event):
             """Try-hard hack to make these objects clickable."""
@@ -305,6 +306,7 @@ class World:
                 new_turf.generate_contents()(self, x, y)
 
     def world_to_string(self):
+        # This function is deprecated in favour of funcs below.
         map_string = ""
         for y in range(self.max_y):
             for x in range(self.max_x):
@@ -314,10 +316,53 @@ class World:
                 for struc in strucs:
                     if(struc.priority > prior):
                         prior = struc.priority
-                        sym = struc.symbol
+                        sym = struc.icon_symbol
                 map_string = map_string + sym + " "
             map_string = map_string + "\n"
         return map_string
+
+    def update_coord_icon(self, x, y):
+        if(not self.initiated):
+            return
+
+        tile = self.get_tile_contents(x, y)
+
+        overlays = []
+        icons = []
+
+        max_priority = 0
+        max_atom = None
+
+        for atom in tile:
+            if(atom.priority > max_priority):
+                max_priority = atom.priority
+                max_atom = atom
+            if(atom.is_overlayable()):
+                overlays.append(atom)
+
+        if(max_atom and max_atom not in overlays):
+            overlays.append(max_atom)
+
+        if(overlays):
+            if(max_atom.block_overlays):
+                icons.append(max_atom.get_icon())
+            else:
+                overlays = sort_by_priority(overlays)
+                for overlay in overlays:
+                    icons.append(overlay.get_icon())
+
+            if(icons):
+                for GUI in self.GUIs:
+                    GUI.update_icon_for(x, y, icons)
+
+
+    def update_world_icons(self):
+        for coord in self.map_c:
+            coord_list = coord_to_list(coord)
+            x = coord_list["x"]
+            y = coord_list["y"]
+            self.update_coord_icon(x, y)
+
 
     def generate_cluster(self, x, y, x_range, y_range, tile_type, chance, turf):
         for y_ in range(y - y_range, y + y_range + 1):
@@ -326,9 +371,12 @@ class World:
                     if(not prob(chance)):
                         continue
                     if(turf):
-                        for struc in self.get_tile_contents(x_, y_):
-                            if(isinstance(struc, Turf)):
+                        tile_c = self.get_tile_contents(x_, y_)
+                        for struc in tile_c:
+                            if(not find_in_list(tile_type.allowed_contents, struc.name)):
                                 self.map_c[x_y_to_coord(x_, y_)].remove(struc)
+                                struc.qdel()
+                                del struc
                     else:
                         tile = self.get_turf(x_, y_)
                         if(not find_in_list(tile.allowed_contents, tile_type.name)):
@@ -407,7 +455,11 @@ class Faction:
 atoms = []
 
 class Atom:
-    symbol = ""
+    icon_symbol = ""
+    icon_color = "green"
+    icon_font = 'TkFixedFont'
+    overlayable = False
+    block_overlays = False
     priority = 0
 
     name = ""
@@ -452,7 +504,7 @@ class Atom:
         log = log + self.getExamineText() + "\n"
 
     def getExamineText(self):
-        return str(self.symbol) + " [" + self.display_name + "] " + self.default_description
+        return str(self.icon_symbol) + " [" + self.display_name + "] " + self.default_description
 
     def get_world(self):
         if(isinstance(loc, World)):
@@ -490,6 +542,7 @@ class Atom:
         self.loc.contents.append(self)
         self.x = x
         self.y = y
+        self.update_icon()
 
     def attempt_move_to(self, world, x, y):
         for struc in world.get_tile_contents(x, y):
@@ -547,14 +600,26 @@ class Atom:
             self.world.map_c[x_y_to_coord(self.x, self.y)].remove(self)
         if(find_in_list(self.loc.contents, self)):
             self.loc.contents.remove(self)
+        self.update_icon()
         self.loc = None
         del self
+
+    def update_icon(self):
+        if(isinstance(self.loc, World)):
+            self.loc.update_coord_icon(self.x, self.y)
+
+    def get_icon(self):
+        return {"symbol": self.icon_symbol, "color": self.icon_color, "font": self.icon_font}
+
+    def is_overlayable(self):
+        return self.overlayable
 
 class Area(Atom):
     priority = 0
     obstruction = False
 
 class Turf(Atom):
+    overlayable = True
     priority = 1
     allowed_contents = []
     size = 20 # Turfs are really big.
@@ -584,43 +649,47 @@ class Mob(Moveable):
 
 #Turfs.
 class Plains(Turf):
-    symbol = "_"
+    icon_symbol = "_"
     name = "Plains"
     default_description = "A plain sight, not much to see."
     allowed_contents = {"Nothing" : 100, "Tall_Grass" : 30, "Forest" : 5}
 
 class Hills(Turf):
-    symbol = "-"
+    icon_symbol = "-"
     name = "Hills"
     default_description = "Hilly terrain. Up and down..."
     allowed_contents = {"Nothing" : 100, "Forest" : 1}
 
 class Rocky(Turf):
-    symbol = "="
+    icon_symbol = "="
     name = "Rocky"
     default_description = "Hills, but with a slight chance of rocks being around."
     allowed_contents = {"Nothing" : 100, "Mountain" : 10, "Iron_Deposit" : 3, "Gold_Deposit" : 1, "Forest" : 1}
 
 class Water(Turf):
-    symbol = "~"
+    icon_symbol = "~"
+    icon_color = "blue"
     name = "Water"
     default_description = "Wet. Moist. Is a fluid."
     obstruction = True
 
 #Objects.
 class Nothing(Object):
-    symbol = ""
+    icon_symbol = ""
     name = "Nothing"
 
     def __init__(self, world, x, y):
         del self
 
 class Fire(Object):
-    symbol = "x"
+    icon_symbol = "x"
+    icon_color = "red"
+    priority = 19
+    overlayable = True
+
     name = "Fire"
     default_description = "Full of passion and desire, it is very much a fire."
     size = 3
-    priority = 19
 
     action_time = 3
     needs_processing = True
@@ -652,6 +721,7 @@ class Fire(Object):
                     break
             #if(prob(self.integrity * 5) and not (x_ == self.x and y_ == self.y)):
                 #self.spread_to(x_, y_)
+        self.update_icon()
         self.crumble(1)
 
     def spread_to(self, x, y):
@@ -666,7 +736,7 @@ class Fire(Object):
 
 
 class Lightning(Object):
-    symbol = "z"
+    icon_symbol = "z"
     name = "Lightning"
     default_description = "It is before the Thunder."
     size = 1
@@ -746,9 +816,9 @@ class Tall_Grass(Resource):
     name = "Tall_Grass"
     default_description = "A grass to eat when hungy."
     size = 3
-    priority = 0
+    priority = 2
 
-    symbol = "|"
+    icon_symbol = "|"
 
     harvestable = True
     allow_peasants = True
@@ -764,7 +834,7 @@ class Tall_Grass(Resource):
 
 
 class Forest(Resource):
-    symbol = "^"
+    icon_symbol = "^"
     name = "Forest"
     default_description = "A place for trees to go, for a Lumberjack to cut."
     size = 10
@@ -783,7 +853,9 @@ class Forest(Resource):
 
 
 class Mountain(Resource):
-    symbol = "A"
+    icon_symbol = "A"
+    icon_color = "gray26"
+    block_overlays = True
     name = "Mountain"
     default_description = "A rock of rocks, that is rockier than most."
     obstruction = True
@@ -799,12 +871,13 @@ class Mountain(Resource):
 
 
 class Iron_Deposit(Resource):
+    icon_symbol = "i"
+    icon_color = "gray99"
     name = "Iron_Deposit"
     default_description = "It has iron in it!"
     obstruction = True
     size = 3
-    priority = 0
-    symbol = "i"
+    priority = 2
 
     harvestable = True
     allow_peasants = False
@@ -816,12 +889,13 @@ class Iron_Deposit(Resource):
 
 
 class Gold_Deposit(Resource):
+    icon_symbol = "g"
+    icon_color = "gold"
     name = "Gold_Deposit"
     default_description = "It has gold in it!"
     obstruction = True
     size = 3
-    priority = 0
-    symbol = "g"
+    priority = 2
 
     harvestable = True
     allow_peasants = False
@@ -882,7 +956,8 @@ class Saw(Tool):
     job = "Carpenter"
 
 class City(Object):
-    symbol = "1"
+    icon_color = "grey"
+    icon_symbol = "1"
     name = "City"
     default_description = ""  # Uses custom code.
     priority = 30 # Should actually be above mob layer.
@@ -1062,7 +1137,7 @@ class City(Object):
                     #print(citizen.display_name + " is trying to perform " + str(task))
                     #print("Has actions left: " + str(citizen.actions_to_perform))
                     if(citizen.perform_task(strucs, task)):
-                        print(citizen.display_name + " performed " + str(task))
+                        #print(citizen.display_name + " performed " + str(task))
                         if(isinstance(task["target"], Resource) and task["target"].resource == "food"):
                             actual_food_supply += task["target"].resource_multiplier * task["target"].default_resource_multiplier
                         self.tasks.remove(task)
@@ -1093,11 +1168,11 @@ class City(Object):
         self.max_population = 10 + houses_count * 2
 
         if(len(self.citizens) < 100):
-            self.symbol = str(int(len(self.citizens) // 10))
+            self.icon_symbol = str(int(len(self.citizens) // 10))
         elif(len(self.citizens) < 1000):
-             self.symbol = "L"
+             self.icon_symbol = "L"
         elif(len(self.citizens) < 10000):
-             self.symbol = "M"
+             self.icon_symbol = "M"
 
         if(len(self.citizens) > self.max_population): # Overpopulation - DEATH!
             self.remove_citizen(None)
@@ -1109,19 +1184,22 @@ class City(Object):
                     continue
                 if(struc.crumble(self.size)):
                     continue
-        print(self.display_name)
+        self.update_icon()
+
+        #print(self.display_name)
         #print(self.faction.display_name)
-        print(self.resources)
-        print(self.inventory)
+        #print(self.resources)
+        #print(self.inventory)
         l = ""
         for cit in self.citizens:
             l = l + cit.display_name + " "
-        print(l)
+        #print(l)
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
         self.citizens.append(citizen)
         citizen.try_equip()
+        self.update_icon()
 
     def remove_citizen(self, citizen_):
         if(citizen_):
@@ -1131,6 +1209,7 @@ class City(Object):
             citizen_ = random.choice(self.citizens)
             citizen_.qdel()
             del citizen_
+        self.update_icon()
         if(len(self.citizens) == 0):
             #time.sleep(30)
             self.qdel()
@@ -1167,11 +1246,13 @@ class City(Object):
         return False
 
 class Structure(Resource): #Only one per tile.
+    icon_color = "grey"
+    block_overlays = True
     size = 5
     priority = 12
 
 class Construction(Structure):
-    symbol = "c"
+    icon_symbol = "c"
     name = "Construction"
 
     def __init__(self, loc, x, y, to_construct, struc_type):
@@ -1195,7 +1276,7 @@ class Construction(Structure):
         super().qdel()
 
 class House(Structure):
-    symbol = "h"
+    icon_symbol = "h"
     name = "House"
     work_required = 15
 
@@ -1207,7 +1288,7 @@ class House(Structure):
         return True
 
 class Farm(Structure):
-    symbol = "w"
+    icon_symbol = "w"
     name = "Farm"
     work_required = 10
 
@@ -1226,7 +1307,7 @@ class Farm(Structure):
 
 
 class Mine(Structure):
-    symbol = "m"
+    icon_symbol = "m"
     name = "Mine"
     work_required = 20
 
@@ -1242,7 +1323,7 @@ class Mine(Structure):
 
 #Mobs.
 class Citizen(Mob):
-    symbol = ""
+    icon_symbol = ""
     max_actions_to_perform = 2
     priority = 0
 
@@ -1508,7 +1589,7 @@ class Citizen(Mob):
                 self.loc.inventory.remove(self.tool)
 
 class Toddler(Citizen):
-    symbol = "t"
+    icon_symbol = "t"
     name = "Toddler"
 
     def __init__(self, loc, x, y):
@@ -1551,7 +1632,7 @@ class Toddler(Citizen):
         self.loc.remove_citizen(self)
 
 class Peasant(Citizen):
-    symbol = "p"
+    icon_symbol = "p"
     name = "Peasant"
 
     def perform_task(self, strucs, task): # These are in that very order for a reason.
@@ -1574,39 +1655,39 @@ class Peasant(Citizen):
         return super().perform_task(strucs, task)
 
 class Builder(Citizen):
-    symbol = "b"
+    icon_symbol = "b"
     name = "Builder"
 
 class Farmer(Citizen):
-    symbol = "f"
+    icon_symbol = "f"
     name = "Farmer"
 
 class Miner(Citizen):
-    symbol = "m"
+    icon_symbol = "m"
     name = "Miner"
 
 class Stonecutter(Citizen):
-    symbol = "s"
+    icon_symbol = "s"
     name = "Stonecutter"
 
 class Blacksmith(Citizen):
-    symbol = "B"
+    icon_symbol = "B"
     name = "Blacksmith"
 
 class Weaponsmith(Citizen):
-    symbol = "w"
+    icon_symbol = "w"
     name = "Weaponsmith"
 
 class Lumberjack(Citizen):
-    symbol = "l"
+    icon_symbol = "l"
     name = "Lumberjack"
 
 class Carpenter(Citizen):
-    symbol = "c"
+    icon_symbol = "c"
     name = "Carpenter"
 
 class Citizens(Mob):
-    symbol = "o"
+    icon_symbol = "o"
     name = "Citizens"
     priority = 29
     size = 1
@@ -1667,11 +1748,13 @@ class Citizens(Mob):
                     continue
                 if(struc.crumble(self.size)):
                     return
+        self.update_icon()
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
         self.citizens.append(citizen)
         citizen.try_equip()
+        self.update_icon()
 
     def remove_citizen(self, citizen_):
         if(citizen_):
@@ -1681,6 +1764,7 @@ class Citizens(Mob):
             citizen_ = random.choice(self.citizens)
             citizen_.qdel()
             del citizen_
+        self.update_icon()
         if(len(self.citizens) == 0):
             self.qdel()
             del self
@@ -1781,6 +1865,7 @@ class Game_Window:
     cur_world = None
 
     def __init__(self, world):
+        self.icon_update = False
         self.showing_turf = None  # Is set to the showing turf window upon showing the turf.
         self.showing_turf_content = None
         self.showing_turf_strucs = []
@@ -1790,6 +1875,7 @@ class Game_Window:
         self.pixels_per_tile = self.default_pixels_per_tile
 
         self.cur_world = world
+        self.cur_world.GUIs.append(self)
         self.wind_wid = int(round(self.cur_world.max_x * self.pixels_per_tile))
         self.wind_hei = int(round(self.cur_world.max_y * self.pixels_per_tile))
 
@@ -1805,13 +1891,17 @@ class Game_Window:
         self.box2 = tkinter.Frame(self.right, borderwidth=2, relief="solid")
 
         def on_click(event):
-            x_ = int(round(event.x // self.pixels_per_tile))
-            y_ = int(round(event.y // self.pixels_per_tile))
+            x_ = int(round(event.x / self.pixels_per_tile - 1))
+            y_ = int(round(event.y / self.pixels_per_tile - 1))
             self.cur_world.ClickedOn(self, x_, y_)
 
-        self.map_field = tkinter.Canvas(self.container, width=self.wind_wid, height=self.wind_hei, bg='black')
+        self.map_field = tkinter.Canvas(self.container, width=self.wind_wid + self.pixels_per_tile, height=self.wind_hei  + self.pixels_per_tile, bg='black')
         self.map_field.bind("<ButtonPress-1>", on_click)
-        self.map_bg = self.map_field.create_text(int(round(self.wind_wid / 2)), int(round(self.wind_hei / 2)), text=self.cur_world.world_to_string(), fill = 'green', font = 'TkFixedFont')
+        self.map_field_overlays = {}
+        self.icon_update = True
+
+        self.cur_world.update_world_icons()
+
         self.chatlog = tkinter.Canvas(self.box1, width=int(round(self.wind_wid / 2)), height=self.wind_hei, bg = 'dark blue')
         self.chat = self.chatlog.create_text(int(round(self.wind_wid / 4)), int(round(self.wind_hei / 2)), width = int(round(self.wind_wid / 2)), text=log, fill = 'white', font = 'TkFixedFont 12')
         # Since it uses TkFixedFont 12, we divide by 12. Almost makes sense.
@@ -1861,11 +1951,11 @@ class Game_Window:
         self.act_button = tkinter.Button(self.left, text="Act", width=int(self.wind_wid // 80), command=action)
         self.current_time = tkinter.Label(self.box2, text="Current Time: " + time_to_date(self.cur_world.time))
 
-        self.left.pack(side="left", expand=True, fill="both")
-        self.right.pack(side="right", expand=True, fill="both")
-        self.container.pack(expand=True, fill="both", padx=5, pady=5)
-        self.box1.pack(expand=True, fill="both", padx=10, pady=10)
-        self.box2.pack(expand=True, fill="both", padx=10, pady=10)
+        self.left.pack(side="left", fill="both")
+        self.right.pack(side="right", fill="both")
+        self.container.pack(expand=True, padx=5, pady=5)
+        self.box1.pack(expand=True, padx=10, pady=10)
+        self.box2.pack(expand=True, padx=10, pady=10)
 
         self.map_field.pack()
         self.chatlog.pack()
@@ -1875,7 +1965,6 @@ class Game_Window:
 
         def cycle():
             self.current_time.config(text="Current Time: " + time_to_date(self.cur_world.time))
-            self.map_field.itemconfigure(self.map_bg, text=self.cur_world.world_to_string())
             self.chatlog.itemconfigure(self.chat, text=log)
             self.wind.after(1, cycle)
 
@@ -1890,27 +1979,36 @@ class Game_Window:
             y_temp = self.wind.winfo_y() + self.showing_turf_rel_y
             self.showing_turf.master.geometry("+%d+%d" % (x_temp, y_temp))
 
+    def update_icon_for(self, x, y, icons):
+        if(not self.icon_update):
+            return
 
+        coord = x_y_to_coord(x, y)
 
-def main():
-    prepare_lists()
+        if(not coord in self.map_field_overlays):
+            self.map_field_overlays[coord] = []
 
-    The_Map = World(1)  # World initiation on z = 1.
+        for icon in self.map_field_overlays[coord]:
+            self.map_field.delete(icon)
+        for icon in icons:
+            self.map_field_overlays[coord].append(self.map_field.create_text(int(round(x * self.pixels_per_tile) + self.pixels_per_tile), int(round(y * self.pixels_per_tile) + self.pixels_per_tile), text=icon["symbol"], font=icon["font"], fill=icon["color"]))
 
-    Tall_Grass(The_Map, 27, 24)
-    Tall_Grass(The_Map, 29, 25)
-    Tall_Grass(The_Map, 27, 24)
-    Tall_Grass(The_Map, 29, 25)
-    Tall_Grass(The_Map, 28, 26)
-    Tall_Grass(The_Map, 28, 26)
-    Forest(The_Map, 27, 24)
-    City(The_Map, 28, 25)
-    Mountain(The_Map, 29, 26)
-    Iron_Deposit(The_Map, 29, 26)
-    Gold_Deposit(The_Map, 29, 26)
+prepare_lists()
 
-    threading.Thread(target=master_controller).start()  # Controller start up.
+The_Map = World(1)  # World initiation on z = 1.
 
-    GUI = Game_Window(The_Map)  # Opening the gui window.
+Tall_Grass(The_Map, 27, 24)
+Tall_Grass(The_Map, 29, 25)
+Tall_Grass(The_Map, 27, 24)
+Tall_Grass(The_Map, 29, 25)
+Tall_Grass(The_Map, 28, 26)
+Tall_Grass(The_Map, 28, 26)
+Forest(The_Map, 27, 24)
+City(The_Map, 28, 25)
+Mountain(The_Map, 29, 26)
+Iron_Deposit(The_Map, 29, 26)
+Gold_Deposit(The_Map, 29, 26)
 
-main()
+threading.Thread(target=master_controller).start()  # Controller start up.
+
+GUI = Game_Window(The_Map)  # Opening the gui window.
