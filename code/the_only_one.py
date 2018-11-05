@@ -8,7 +8,7 @@ import copy
 import datetime
 
 # Defines go here.
-#sys.stdout = open('log.txt', 'w') # Uncomment if you want to export to a log file.
+# sys.stdout = open('log.txt', 'w') # Uncomment if you want to export to a log file.
 
 log = ""
 sqrt_2 = math.sqrt(2)
@@ -17,10 +17,12 @@ runtime = True
 to_sleep_time = 10
 freeze_time = False
 
-city_output = False
+city_output = True
 
 atoms = []
 atoms_by_name = {}
+
+tools_by_job = {}
 
 factions = []
 
@@ -126,6 +128,12 @@ def text_to_path(text):
     return atoms_by_name[text]
 
 
+def job_to_tool(job):
+    if(job not in tools_by_job):
+        return None
+    return tools_by_job[job]
+
+
 def sort_by_priority(atom_list: list):
     """
     Please, do consider that this function
@@ -154,6 +162,9 @@ def prepare_lists():
     atom_classes = get_all_subclasses(Atom)
     for atom in atom_classes:
         atoms_by_name[atom.name] = atom
+    tool_classes = get_all_subclasses(Tool)
+    for tool in tool_classes:
+        tools_by_job[tool.job] = tool
 
 
 def master_controller():
@@ -838,7 +849,7 @@ class Fire(Object):
         Fire(self.world, x, y, self.integrity)
 
     def get_task(self, city):
-        return {"priority" : 1, "job" : "Peasant", "task" : "destroy", "target" : self, "allowed_peasants" : True}
+        return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True}
 
     def react_to_attack(self, attacker):
         if(prob(10)):
@@ -884,7 +895,7 @@ class Resource(Object):
 
     def get_task(self, city):
         if(self.harvestable):
-            return {"priority" : self.harv_priority, "job" : self.job_to_harvest, "task" : "harvest", "target" : self, "allowed_peasants" : self.allow_peasants}
+            return {"priority" : self.harv_priority, "jobs" : [self.job_to_harvest], "task" : "harvest", "target" : self, "allowed_peasants" : self.allow_peasants}
 
     def harvest(self, harvester, amount):
         """Returns how much resource has actually been harvested."""
@@ -1019,10 +1030,17 @@ class Gold_Deposit(Resource):
     def_amount = 30
 
 
-
 class Tool(Object):
     name = ""
     job = ""
+    make_priority = 0
+    jobs_to_make = []
+    allowed_peasants = False
+    # restype_ is a macro for using res_make_of
+    res_to_make = {"restype_": 1, "wood": 1}
+
+    res_make_of = None  # Chisel makes out of stone, etc.
+    res_quality = 1.0  # Chisel should have higher quality, since it makes out of stone.
 
     def __init__(self, loc, x, y, materials={"wood" : 5}, quality_modifier=1):
         self.x = x
@@ -1041,41 +1059,78 @@ class Tool(Object):
 class Hoe(Tool):
     name = "Hoe"
     job = "Farmer"
+    make_priority = 1
+    jobs_to_make = ["Carpenter", "Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Hammer(Tool):
     name = "Hammer"
     job = "Builder"
+    make_priority = 2
+    jobs_to_make = ["Carpenter", "Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Axe(Tool):
     name = "Axe"
     job = "Lumberjack"
+    make_priority = 3
+    jobs_to_make = ["Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Sledgehammer(Tool):
     name = "Sledgehammer"
     job = "Blacksmith"
+    make_priority = 4
+    jobs_to_make = ["Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Sharphammer(Tool):
     name = "Sharphammer"
     job = "Weaponsmith"
+    make_priority = 4
+    jobs_to_make = ["Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Pickaxe(Tool):
     name = "Pickaxe"
     job = "Miner"
+    make_priority = 3
+    jobs_to_make = ["Stonecutter"]
+    allowed_peasants = False
+    res_to_make = {"restype_": 5}
 
 
 class Chisel(Tool):
     name = "Chisel"
     job = "Stonecutter"
+    make_priority = 3
+    jobs_to_make = ["Peasant"]
+    allowed_peasants = True
+    res_to_make = {"stone": 5}
+
+    res_make_of = "stone"
+    res_quality = 1.5
 
 
 class Saw(Tool):
     name = "Saw"
     job = "Carpenter"
+    make_priority = 2
+    jobs_to_make = ["Peasant"]
+    allowed_peasants = True
+    res_to_make = {"wood": 5}
+
+    res_make_of = "wood"
 
 
 class City(Object):
@@ -1233,48 +1288,29 @@ class City(Object):
         for tool in self.inventory:
             if(not isinstance(tool, Tool)):
                 if(not self.tool_request[tool.job] > 0):
-                    self.tasks.append({"priority": 5, "job": "Peasant", "task": "break", "target": tool, "allowed_peasants": True})
+                    self.tasks.append({"priority": 5, "jobs": ["Peasant"], "task": "break", "target": tool, "allowed_peasants": True})
 
         for tool_request in self.tool_requests:
             if(self.tool_requests[tool_request] <= 0):
                 continue
-            if(tool_request == "Farmer"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 1, "job" : "Carpenter", "task" : "create", "target" : Hoe, "res_required" : {"wood" : 5}, "allowed_peasants" : False})
-            elif(tool_request == "Builder"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 2, "job" : "Carpenter", "task" : "create", "target" : Hammer, "res_required" : {"wood" : 5}, "allowed_peasants" : False})
-            elif(tool_request == "Carpenter"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 2, "job" : "Peasant", "task" : "create", "target" : Saw, "res_required" : {"wood" : 5}, "allowed_peasants" : True})
-            elif(tool_request == "Stonecutter"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 3, "job" : "Peasant", "task" : "create", "target" : Chisel, "res_required" : {"stone" : 5}, "allowed_peasants" : True})
-            elif(tool_request == "Miner"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 3, "job" : "Stonecutter", "task" : "create", "target" : Pickaxe, "res_required" : {"stone" : 5}, "allowed_peasants" : False})
-            elif(tool_request == "Lumberjack"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 3, "job" : "Stonecutter", "task" : "create", "target" : Axe, "res_required" : {"stone" : 5}, "allowed_peasants" : False})
-            elif(tool_request == "Blacksmith"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 4, "job" : "Stonecutter", "task" : "create", "target" : Sledgehammer, "res_required" : {"stone" : 5}, "allowed_peasants" : False})
-            elif(tool_request == "Weaponsmith"):
-                for task in range(0, self.tool_requests[tool_request]):
-                    self.tasks.append({"priority" : 4, "job" : "Stonecutter", "task" : "create", "target" : Weaponhammer, "res_required" : {"stone" : 5}, "allowed_peasants" : False})
+            tool_type = job_to_tool(tool_request)
+            if(not tool_type):
+                continue
+            for task_ in range(0, self.tool_requests[tool_request]):
+                self.tasks.append({"priority": tool_type.make_priority, "jobs": tool_type.jobs_to_make, "task": "create", "target": tool_type, "res_required": {"use_macro": 0}, "allowed_peasants": tool_type.allowed_peasants})
 
         for structure_request in self.structure_requests:
             if(self.structure_requests[structure_request] <= 0):
                 continue
             if(structure_request == "Farm"):
                 for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 1, "job" : "Builder", "task" : "build", "target" : Farm, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
+                    self.tasks.append({"priority" : 1, "jobs" : ["Builder"], "task" : "build", "target" : Farm, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
             elif(structure_request == "Mine"):
                 for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 3, "job" : "Builder", "task" : "build", "target" : Mine, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
+                    self.tasks.append({"priority" : 3, "jobs" : ["Builder"], "task" : "build", "target" : Mine, "res_required" : {"wood" : 30}, "allowed_peasants" : False})
             elif(structure_request == "House"):
                 for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 3, "job" : "Builder", "task" : "build", "target" : House, "res_required" : {"wood" : 30, "stone" : 30}, "allowed_peasants" : False})
+                    self.tasks.append({"priority" : 3, "jobs" : ["Builder"], "task" : "build", "target" : House, "res_required" : {"wood" : 30, "stone" : 30}, "allowed_peasants" : False})
 
         actual_food_supply = 0
         cur_priority = 1
@@ -1346,11 +1382,11 @@ class City(Object):
             print(self.display_name)
             print(self.faction.display_name)
             print(self.resources)
-            print(self.inventory)
+            print(len(self.inventory))
             l = ""
             for cit in self.citizens:
                 l = l + cit.display_name + " "
-            print(l)
+            print(l + "[" + str(len(self.citizens)) + "]")
 
     def add_citizen(self, job):
         citizen = None
@@ -1362,6 +1398,9 @@ class City(Object):
 
     def remove_citizen(self, citizen_):
         if(citizen_):
+            if(citizen_.tool):
+                self.inventory.append(citizen_.tool)
+                citizen_.tool = None
             citizen_.qdel()
             del citizen_
         elif(len(self.citizens) > 0):
@@ -1370,12 +1409,15 @@ class City(Object):
             del citizen_
         if(len(self.citizens) == 0):
             self.qdel()
+            del self
 
     def get_priority_tasks_list(self, priority):
+        #print(priority)
         list_ = []
         for task in self.tasks:
             if(task["priority"] == priority):
                 list_.append(task)
+        #print(list_)
         return list_
 
     def get_susceptible_citizens_list(self, task):
@@ -1388,7 +1430,7 @@ class City(Object):
                 continue
             pos_cits.append(citizen)
         for citizen in pos_cits:
-            if(citizen.job == task["job"]):
+            if(citizen.job in task["jobs"]):
                 list_.append(citizen)
                 pos_cits.remove(citizen)
         # It actually allows not just peasants, but everybody.
@@ -1408,9 +1450,9 @@ class City(Object):
         if(city.faction != self.faction):
             relation = self.faction.get_relationship(city.faction)
             if(relation == "Unfriendly" or relation == "Neutral" or relation == "Friendly"):
-                return {"priority" : 2, "job" : "Peasant", "task" : "gift", "res_required" : {random.choice(["food", "wood", "stone"]) : random.randint(10, 20)}, "target" : self, "allowed_peasants" : True}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "gift", "res_required" : {random.choice(["food", "wood", "stone"]) : random.randint(10, 20)}, "target" : self, "allowed_peasants" : True}
             if(relation == "Hostile"):
-                return {"priority" : 2, "job" : "Peasant", "task" : "kidnap", "target" : self, "allowed_peasants" : True}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "kidnap", "target" : self, "allowed_peasants" : True}
         return super().get_task(city)
 
     def fire_act(self, severity):
@@ -1448,7 +1490,7 @@ class Structure(Resource):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Hostile"):
-                return {"priority" : 2, "job" : "Peasant", "task" : "claim", "target" : self, "allowed_peasants" : True}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True}
         return super().get_task(city)
 
     def qdel(self):
@@ -1478,8 +1520,8 @@ class Construction(Structure):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Hostile"):
-                return {"priority" : 2, "job" : "Peasant", "task" : "claim", "target" : self, "allowed_peasants" : True}
-        return {"priority" : 2, "job" : "Builder", "task" : "construct", "target" : self, "allowed_peasants" : False}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True}
+        return {"priority" : 2, "jobs" : ["Builder"], "task" : "construct", "target" : self, "allowed_peasants" : False}
 
     def qdel(self):
         self.qdeling = True
@@ -1497,8 +1539,8 @@ class House(Structure):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Hostile"):
-                return {"priority": 2, "job": "Peasant", "task": "claim", "target": self, "allowed_peasants": True}
-        return {"priority": 1, "job": "Peasant", "task": "rest", "target": self, "allowed_peasants": True}
+                return {"priority": 2, "jobs": ["Peasant"], "task": "claim", "target": self, "allowed_peasants": True}
+        return {"priority": 1, "jobs": ["Peasant"], "task": "rest", "target": self, "allowed_peasants": True}
 
     def fire_act(self, severity):
         self.crumble(severity)
@@ -1674,13 +1716,26 @@ class Citizen(Mob):
             return self.break_tool(task["target"])
         return False
 
+
     def create(self, resources_required, item_type):
+        if("use_macro" in resources_required):
+            resources_required = item_type.res_to_make
+            if("restype_" in resources_required):
+                resources_required[self.tool.res_make_of] = resources_required.pop("restype_")
+
         for res in resources_required:
             if(self.loc.resources[res] <= resources_required[res]):
                 return False
+
         for res in resources_required:
             self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
-        self.loc.inventory.append(item_type(self.loc, -2, -2, resources_required, self.quality_modifier))
+
+        modifier = self.quality_modifier
+
+        if(self.tool):
+            modifier = modifier * self.tool.res_quality
+
+        self.loc.inventory.append(item_type(self.loc, -2, -2, resources_required, modifier))
         self.actions_to_perform -= 1
         return True
 
@@ -1806,15 +1861,15 @@ class Citizen(Mob):
         return requests
 
     def required_tools(self, reqs):
-        requests = copy.deepcopy(reqs)
-        for req in requests:
-            requests[req] = requests[req] * 2  # We need twice more tools than we need the job.
+        actual_requests = {}
+        for req in reqs:
+            actual_requests[req] = int(round(reqs[req]))
 
         for tool in self.loc.inventory:
             if(not isinstance(tool, Tool)):
                 continue
-            requests[tool.job] -= 1
-        return requests
+            actual_requests[tool.job] -= 1
+        return actual_requests
 
     def required_strucs(self, strucs, food_required):
         requests = {"House" : 0,
@@ -1885,6 +1940,7 @@ class Citizen(Mob):
             if(tool.job != self.job):
                 continue
             if(tool.quality > self.get_tool_quality(self.job)):
+                # print("Boosted my productivity by: " + str(tool.quality - self.get_tool_quality(self.job)))
                 if(self.tool):
                     self.loc.inventory.append(self.tool)
                 self.tool = tool
@@ -1929,7 +1985,6 @@ class Toddler(Citizen):
     def become_adult(self):
         # Read somewhere above about the -2 -2.
         peasant = Citizen(self.loc, -2, -2, "Peasant")
-        peasant.try_equip()
         peasant.health = self.health
         peasant.age = self.age
 
@@ -2036,7 +2091,7 @@ class Citizens(Mob):
     def remove_citizen(self, citizen_):
         if(citizen_):
             if(citizen_.tool):
-                self.loc.inventory.tools.append(citizen_.tool)
+                self.inventory.append(citizen_.tool)
                 citizen_.tool = None
             citizen_.qdel()
             del citizen_
