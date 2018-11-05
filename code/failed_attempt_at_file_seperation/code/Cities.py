@@ -1,16 +1,30 @@
+import random
+import tkinter
+import math
+import threading
+import time
+import sys
+import copy
+
+# Order of these is indeed important.
+import code.Globals as Globals
+from code.Funcs import *
+from code.Coords import *
 from code.Time import *
 from code.Factions import *
+from code.Atoms import *
+from code.Areas import *
+from code.Turfs import *
 from code.Objects import *
 from code.Mobs import *
-from code.Turfs import *
+from code.GUIs import *
 
-import random
 
 class Tool(Object):
     name = ""
     job = ""
 
-    def __init__(self, loc, x, y, materials = {"wood" : 5}, quality_modifier = 1):
+    def __init__(self, loc, x, y, materials={"wood" : 5}, quality_modifier=1):
         self.x = x
         self.y = y
         self.loc = loc
@@ -19,47 +33,57 @@ class Tool(Object):
 
     def qdel(self):
         self.qdeling = True
-        if(find_in_list(self.loc.inventory, self)):
+        if(self in self.loc.inventory, self):
             self.loc.inventory.remove(self)
         del self
+
 
 class Hoe(Tool):
     name = "Hoe"
     job = "Farmer"
 
+
 class Hammer(Tool):
     name = "Hammer"
     job = "Builder"
+
 
 class Axe(Tool):
     name = "Axe"
     job = "Lumberjack"
 
+
 class Sledgehammer(Tool):
     name = "Sledgehammer"
     job = "Blacksmith"
+
 
 class Sharphammer(Tool):
     name = "Sharphammer"
     job = "Weaponsmith"
 
+
 class Pickaxe(Tool):
     name = "Pickaxe"
     job = "Miner"
+
 
 class Chisel(Tool):
     name = "Chisel"
     job = "Stonecutter"
 
+
 class Saw(Tool):
     name = "Saw"
     job = "Carpenter"
 
+
 class City(Object):
-    symbol = "1"
+    icon_color = "grey"
+    icon_symbol = "1"
     name = "City"
     default_description = ""  # Uses custom code.
-    priority = 30 # Should actually be above mob layer.
+    priority = 30  # Should actually be above mob layer.
     size = 5
 
     starting_citizens = 5
@@ -67,8 +91,13 @@ class City(Object):
     needs_processing = True
     action_time = 5
 
-    def __init__(self, loc, x, y, faction = None):
-        global log
+    def __init__(self, loc, x, y, faction=None):
+        self.faction = faction
+        if(faction):
+            faction.add_to_faction(self)
+        else:
+            self.faction = Faction(self)
+
         super().__init__(loc, x, y)
         self.display_name = self.name + " " + str(random.randrange(1, 999))
         self.max_population = 10
@@ -85,11 +114,6 @@ class City(Object):
                              "Carpenter" : 1}
         self.structure_requests = []
         self.tasks = []
-        if(faction):
-            self.faction = faction
-            self.faction.add_to_faction(self)
-        else:
-            self.faction = Faction(self)
         self.resources = {"food" : 100,
                           "wood" : 0,
                           "stone" : 0,
@@ -99,7 +123,7 @@ class City(Object):
         for N in range(self.starting_citizens):
             self.add_citizen(Peasant)
 
-        log += self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+        Globals.log += self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
 
     def getExamineText(self):
         text = super().getExamineText()
@@ -109,7 +133,7 @@ class City(Object):
     def qdel(self):
         global log
         self.qdeling = True
-        log = log + self.display_name + " has been destroyed in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+        Globals.log += self.display_name + " has been destroyed in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
         for cit in self.citizens:
             cit.qdel()
             del cit
@@ -119,6 +143,8 @@ class City(Object):
             del tool
         self.inventory = []
         self.tasks = []
+        self.faction.members.remove(self)
+        self.faction = None
         super().qdel()
 
     def does_obstruct(self, atom):
@@ -126,8 +152,7 @@ class City(Object):
             if(atom.resources["food"] < 3 * len(atom.citizens) * atom.action_time):
                 atom.transfer_resources_to(atom.resources, self)
                 for citizen in atom.citizens:
-                    citizen.loc = self
-                    self.citizens.append(citizen)
+                    citizen.move_atom_to(self, self.x, self.y)
                 atom.citizens = []
                 atom.qdel()
                 del atom
@@ -137,11 +162,16 @@ class City(Object):
         return False
 
     def process(self):
+        if(not len(self.citizens)):
+            self.qdel()
+            del self
+            return
+
         food_required = 0
         for cit in self.citizens:
             food_required += cit.hunger_rate
+
         actual_food_required = food_required
-        food_supply = 0
 
         strucs = self.world.get_region_contents(self.x, self.y, 2, 2)
         random.shuffle(strucs)
@@ -152,27 +182,35 @@ class City(Object):
 
         self.tasks = []
 
+        houses_count = 0
         for struc in strucs:
+            struc.been_used = False
             task = struc.get_task(self)  # We pass ourselves as city argument.
             if(not task):  # This thing dindu tasking.
                 continue
 
-            if(isinstance(struc, Resource) and struc.resource):
+            if(isinstance(struc, City)):
+                if(self.faction and struc.faction != self.faction):
+                    self.faction.adjust_relationship(struc.faction, -3)
+
+            elif(isinstance(struc, Resource) and struc.resource):
                 if(self.resources[struc.resource] >= 50 * len(self.citizens)):  # We have enough of this...
                     continue
 
-            if(isinstance(struc, Tall_Grass)):
-                food_supply += struc.resource_multiplier * struc.default_resource_multiplier
-                if(food_required > 0):
-                    food_required -= struc.resource_multiplier * struc.default_resource_multiplier
-                else:  # If we have enough food, stop getting it.
-                    continue
-            if(isinstance(struc, Farm)):
-                food_supply += struc.resource_multiplier * struc.default_resource_multiplier
-                if(food_required > 0):
-                    food_required -= struc.resource_multiplier * struc.default_resource_multiplier
-                else:  # If we have enough food, stop getting it.
-                    continue
+                if(isinstance(struc, Tall_Grass)):
+                    if(food_required > 0):
+                        food_required -= struc.resource_multiplier * struc.default_resource_multiplier
+
+                elif(isinstance(struc, Structure)):
+                    if(self.faction != struc.faction and struc.faction):  # If it's Neutral, nobody cares.
+                        struc.faction.adjust_relationship(self.faction, -1)  # Using other faction's strucs is a no-no.
+
+                    elif(isinstance(struc, Farm)):
+                        if(food_required > 0):
+                            food_required -= struc.resource_multiplier * struc.default_resource_multiplier
+
+                    elif(isinstance(struc, House)):
+                        houses_count += 1
 
             self.tasks.append(task)
 
@@ -258,20 +296,14 @@ class City(Object):
                 if(citizen.life() and not citizen.qdeling):
                     citizen.try_equip()  # Even old people steal tools.
 
-        houses_count = 0
-        for struc in strucs:
-            struc.been_used = False
-            if(isinstance(struc, House)):
-                houses_count = houses_count + 1
-
         self.max_population = 10 + houses_count * 2
 
         if(len(self.citizens) < 100):
-            self.symbol = str(int(len(self.citizens) // 10))
+            self.icon_symbol = str(int(len(self.citizens) // 10))
         elif(len(self.citizens) < 1000):
-             self.symbol = "L"
+             self.icon_symbol = "L"
         elif(len(self.citizens) < 10000):
-             self.symbol = "M"
+             self.icon_symbol = "M"
 
         if(len(self.citizens) > self.max_population): # Overpopulation - DEATH!
             self.remove_citizen(None)
@@ -283,6 +315,8 @@ class City(Object):
                     continue
                 if(struc.crumble(self.size)):
                     continue
+        self.update_icon()
+
         #print(self.display_name)
         #print(self.faction.display_name)
         #print(self.resources)
@@ -294,8 +328,8 @@ class City(Object):
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
-        self.citizens.append(citizen)
         citizen.try_equip()
+        self.update_icon()
 
     def remove_citizen(self, citizen_):
         if(citizen_):
@@ -305,8 +339,8 @@ class City(Object):
             citizen_ = random.choice(self.citizens)
             citizen_.qdel()
             del citizen_
+        self.update_icon()
         if(len(self.citizens) == 0):
-            #time.sleep(30)
             self.qdel()
 
     def get_priority_tasks_list(self, priority):
@@ -321,14 +355,27 @@ class City(Object):
         for citizen in self.citizens:
             if(citizen.name == task["job"]):
                 list_.append(citizen)
-        if(task["allowed_peasants"]): # It actually allows not just peasants, but everybody.
+        # It actually allows not just peasants, but everybody.
+        if(task["allowed_peasants"]):
             for citizen in self.citizens:
                 if(citizen.name == "Peasant"):
                     list_.append(citizen)
             for citizen in self.citizens:
-                if(not find_in_list(list_, citizen)):
-                   list_.append(citizen)
+                if(citizen not in list_):
+                    list_.append(citizen)
         return list_
+
+    def get_icon(self):
+        return {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
+
+    def get_task(self, city):
+        if(city.faction != self.faction):
+            relation = self.faction.get_relationship(city.faction)
+            if(relation == "Unfriendly" or relation == "Neutral"):
+                return {"priority" : 1, "job" : "Peasant", "task" : "gift", "res_required" : {random.choice(["food", "wood", "stone"]) : random.randint(1, 10)}, "target" : self, "allowed_peasants" : True}
+            if(relation == "Hostile"):
+                return {"priority" : 1, "job" : "Peasant", "task" : "kidnap", "target" : self, "allowed_peasants" : True}
+        return super().get_task(city)
 
     def fire_act(self, severity):
         for cit in range(severity):
@@ -340,27 +387,56 @@ class City(Object):
                 return True
         return False
 
-class Structure(Resource): #Only one per tile.
+
+class Structure(Resource):
+    icon_color = "grey"
+    block_overlays = True
     size = 5
     priority = 12
 
+    def __init__(self, loc, x, y, faction=None):
+        self.faction = faction
+        if(faction):
+            faction.add_to_faction(self)
+        super().__init__(loc, x, y)
+
+    def get_icon(self):
+        return {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
+
+    def get_task(self, city):
+        if(city.faction != self.faction):
+            relation = city.faction.get_relationship(self.faction)
+            if(relation == "Hostile"):
+                return {"priority" : 1, "job" : "Peasant", "task" : "claim", "target" : self, "allowed_peasants" : True}
+        return super().get_task(city)
+
+    def qdel(self):
+        if(self.faction):
+            self.faction.members.remove(self)
+        self.faction = None
+        super().qdel()
+
 class Construction(Structure):
-    symbol = "c"
+    icon_symbol = "c"
     name = "Construction"
 
-    def __init__(self, loc, x, y, to_construct, struc_type):
-        super().__init__(loc, x, y)
+    def __init__(self, loc, x, y, to_construct, struc_type, faction=None):
+        super().__init__(loc, x, y, faction)
         self.to_construct = to_construct
         self.struc_type = struc_type
 
     def construct(self, severity):
         self.to_construct = max(self.to_construct - severity, 0)
         if(self.to_construct <= 0):
-            self.struc_type(self.loc, self.x, self.y)
+            self.struc_type(self.loc, self.x, self.y, self.faction)
             self.qdel()
             del self
 
     def get_task(self, city):
+        if(city.faction != self.faction):
+            relation = city.faction.get_relationship(self.faction)
+            if(relation == "Hostile"):
+                return {"priority" : 1, "job" : "Peasant", "task" : "claim", "target" : self, "allowed_peasants" : True}
         return {"priority" : 2, "job" : "Builder", "task" : "construct", "target" : self, "allowed_peasants" : False}
 
     def qdel(self):
@@ -368,20 +444,26 @@ class Construction(Structure):
         self.struc_type = None
         super().qdel()
 
+
 class House(Structure):
-    symbol = "h"
+    icon_symbol = "h"
     name = "House"
     work_required = 15
 
     def get_task(self, city):
-        return {"priority" : 5, "job" : "Peasant", "task" : "rest", "target" : self, "allowed_peasants" : True}
+        if(city.faction != self.faction):
+            relation = city.faction.get_relationship(self.faction)
+            if(relation == "Hostile"):
+                return {"priority" : 1, "job" : "Peasant", "task" : "claim", "target" : self, "allowed_peasants" : True}
+        return {"priority" : 1, "job" : "Peasant", "task" : "rest", "target" : self, "allowed_peasants" : True}
 
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
+
 class Farm(Structure):
-    symbol = "w"
+    icon_symbol = "w"
     name = "Farm"
     work_required = 10
 
@@ -400,7 +482,7 @@ class Farm(Structure):
 
 
 class Mine(Structure):
-    symbol = "m"
+    icon_symbol = "m"
     name = "Mine"
     work_required = 20
 
@@ -414,17 +496,14 @@ class Mine(Structure):
     def_amount = 100
 
 
-#Mobs.
 class Citizen(Mob):
-    symbol = ""
+    icon_symbol = ""
     max_actions_to_perform = 2
     priority = 0
 
     def __init__(self, loc, x, y):
-        self.loc = loc
-        self.loc.contents.append(self)
-        self.x = x
-        self.y = y
+        self.loc = None
+        self.move_atom_to(loc, x, y)
         self.display_name = self.name + " " + str(random.randrange(1, 999))
         self.actions_to_perform = self.max_actions_to_perform
 
@@ -440,6 +519,21 @@ class Citizen(Mob):
         self.qdeling = False
         self.quality_modifier = random.uniform(0.8, 1.2)
         self.tool = None
+
+    def move_atom_to(self, loc, x, y):
+        if(self.loc):  # We are already initialized, and have a loc.
+            if(self in self.loc.contents):
+                self.loc.contents.remove(self)
+            if(self in self.loc.citizens):
+                self.loc.citizens.remove(self)
+
+        self.loc = loc
+        self.loc.contents.append(self)
+        self.x = x
+        self.y = y
+        # Currently citizens can't be bothered to move out of the town/ Citizens mob.self
+        # So this bootleg makes sense.
+        self.loc.citizens.append(self)
 
     def life(self):
         self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
@@ -482,9 +576,9 @@ class Citizen(Mob):
             self.tool.qdel()
             tool = None
         if(self.loc):
-            if(find_in_list(self.loc.citizens, self)):
+            if(self in self.loc.citizens):
                 self.loc.citizens.remove(self)
-            if(find_in_list(self.loc.contents, self)):
+            if(self in self.loc.contents):
                 self.loc.contents.remove(self)
         self.loc = None
         del self
@@ -512,6 +606,12 @@ class Citizen(Mob):
             return self.rest(task["target"])
         elif(task["task"] == "destroy"):
             return self.destroy(task["target"])
+        elif(task["task"] == "kidnap"):
+            return self.kidnap(task["target"])
+        elif(task["task"] == "gift"):
+            return self.gift(task["res_required"], task["target"])
+        elif(task["task"] == "claim"):
+            return self.claim(task["target"])
         return False
 
     def create(self, resources_required, item_type):
@@ -533,7 +633,7 @@ class Citizen(Mob):
         for res in resources_required:
             self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
         self.actions_to_perform -= 1
-        Construction(world, x, y, struc_.work_required, struc_)
+        Construction(world, x, y, struc_.work_required, struc_, self.loc.faction)
         return True
 
     def construct(self, target):
@@ -567,6 +667,36 @@ class Citizen(Mob):
                 self.actions_to_perform -= int(damage_to_do)  # Hitting hard takes more effort.
                 return True
         return False
+
+    def kidnap(self, target):
+        if(len(target.citizens)):
+            citizen = random.choice(target.citizens)
+            citizen.move_atom_to(self.loc, -2, -2)
+            self.actions_to_perform -= 1
+            return True
+        return False
+
+    def gift(self, resources_required, target):
+        for res in resources_required:
+            if(self.loc.resources[res] <= resources_required[res]):
+                return False
+        for res in resources_required:
+            self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
+        self.actions_to_perform -= 1
+        target.faction.adjust_relationship(self.loc.faction, 10)
+        return True
+
+    def claim(self, target):
+        if(not target.faction):
+            target.faction = self.loc.faction
+            self.loc.faction.add_to_faction(target)
+            target.update_icon()
+        elif(not target.crumble(1)):  # By "capturing" it, we of course mean murdering it slightly.
+            target.faction.members.remove(target)
+            target.faction = None
+            target.update_icon()
+        self.actions_to_perform -= 1
+        return True
 
     def crumble(self, severity):
         self.health = self.health - severity
@@ -681,8 +811,9 @@ class Citizen(Mob):
                 self.tool = tool
                 self.loc.inventory.remove(self.tool)
 
+
 class Toddler(Citizen):
-    symbol = "t"
+    icon_symbol = "t"
     name = "Toddler"
 
     def __init__(self, loc, x, y):
@@ -724,8 +855,9 @@ class Toddler(Citizen):
         peasant.quality_modifier = self.quality_modifier
         self.loc.remove_citizen(self)
 
+
 class Peasant(Citizen):
-    symbol = "p"
+    icon_symbol = "p"
     name = "Peasant"
 
     def perform_task(self, strucs, task): # These are in that very order for a reason.
@@ -747,40 +879,50 @@ class Peasant(Citizen):
             return False
         return super().perform_task(strucs, task)
 
+
 class Builder(Citizen):
-    symbol = "b"
+    icon_symbol = "b"
     name = "Builder"
 
+
 class Farmer(Citizen):
-    symbol = "f"
+    icon_symbol = "f"
     name = "Farmer"
 
+
 class Miner(Citizen):
-    symbol = "m"
+    icon_symbol = "m"
     name = "Miner"
 
+
 class Stonecutter(Citizen):
-    symbol = "s"
+    icon_symbol = "s"
     name = "Stonecutter"
 
+
 class Blacksmith(Citizen):
-    symbol = "B"
+    icon_symbol = "B"
     name = "Blacksmith"
 
+
 class Weaponsmith(Citizen):
-    symbol = "w"
+    icon_symbol = "w"
     name = "Weaponsmith"
 
+
 class Lumberjack(Citizen):
-    symbol = "l"
+    icon_symbol = "l"
     name = "Lumberjack"
 
+
 class Carpenter(Citizen):
-    symbol = "c"
+    icon_symbol = "c"
     name = "Carpenter"
 
+
 class Citizens(Mob):
-    symbol = "o"
+    icon_symbol = "o"
+    icon_color = "grey"
     name = "Citizens"
     priority = 29
     size = 1
@@ -789,7 +931,7 @@ class Citizens(Mob):
     needs_processing = True
     action_time = 1
 
-    def __init__(self, loc, x, y, faction = None, target = None):
+    def __init__(self, loc, x, y, faction=None, target=None):
         super().__init__(loc, x, y)
         self.try_new = 3
         self.citizens = []
@@ -819,6 +961,11 @@ class Citizens(Mob):
         super().qdel()
 
     def life(self):
+        if(not len(self.citizens)):
+            self.qdel()
+            del self
+            return
+
         if(self.resources["food"] > 100):
             self.resources["food"] = max([self.resources["food"] - 50, 0])
             self.add_citizen(Toddler)
@@ -841,11 +988,12 @@ class Citizens(Mob):
                     continue
                 if(struc.crumble(self.size)):
                     return
+        self.update_icon()
 
     def add_citizen(self, citizen_type):
         citizen = citizen_type(self, -2, -2) #Huehuehue. -2 -2 won't be qdeled.
-        self.citizens.append(citizen)
         citizen.try_equip()
+        self.update_icon()
 
     def remove_citizen(self, citizen_):
         if(citizen_):
@@ -855,6 +1003,7 @@ class Citizens(Mob):
             citizen_ = random.choice(self.citizens)
             citizen_.qdel()
             del citizen_
+        self.update_icon()
         if(len(self.citizens) == 0):
             self.qdel()
             del self
@@ -905,7 +1054,9 @@ class Citizens(Mob):
             elif(isinstance(struc, Gold_Deposit)):
                 quality = quality + 1 * struc.resource_multiplier
             elif(isinstance(struc, City)):
-                if(self.resources["food"] >= 3 * len(self.citizens) * self.action_time):
+                if(struc.faction != self.faction):
+                    quality += 10
+                elif(self.resources["food"] >= 3 * len(self.citizens) * self.action_time):
                     quality = quality + 10
                 else:
                     quality = quality - 10 # Citizens won't move into cities if they can continue on searching for a spot.
