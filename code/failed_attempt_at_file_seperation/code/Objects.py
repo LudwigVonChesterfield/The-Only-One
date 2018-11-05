@@ -1,26 +1,45 @@
+import random
+import tkinter
+import math
+import threading
+import time
+import sys
+import copy
+
+# Order of these is indeed important.
+import code.Globals as Globals
+from code.Funcs import *
+from code.Coords import *
+from code.Time import *
 from code.Atoms import *
+
 
 class Object(Moveable):
     priority = 11
 
+
 class Nothing(Object):
-    symbol = ""
+    icon_symbol = ""
     name = "Nothing"
 
     def __init__(self, world, x, y):
         del self
 
+
 class Fire(Object):
-    symbol = "x"
+    icon_symbol = "x"
+    icon_color = "red"
+    priority = 19
+    overlayable = True
+
     name = "Fire"
     default_description = "Full of passion and desire, it is very much a fire."
     size = 3
-    priority = 19
 
     action_time = 3
     needs_processing = True
 
-    def __init__(self, loc, x, y, integrity = 3):
+    def __init__(self, loc, x, y, integrity=3):
         super().__init__(loc, x, y)
         self.integrity = integrity
 
@@ -38,18 +57,19 @@ class Fire(Object):
                         self.integrity = min([self.integrity + 1, self.size])
                 continue
             for struc in strucs:
-                if(isinstance(struc, Fire)):
-                    break
-                if(isinstance(struc, Water)):
-                    break
                 if(struc.fire_act(1)):
                     self.spread_to(struc.x, struc.y)
                     break
-            #if(prob(self.integrity * 5) and not (x_ == self.x and y_ == self.y)):
-                #self.spread_to(x_, y_)
+        self.update_icon()
         self.crumble(1)
 
     def spread_to(self, x, y):
+        strucs = self.world.get_tile_contents(x, y)
+        for struc in strucs:
+            if(isinstance(struc, Water)):
+                return
+            if(isinstance(struc, Fire)):
+                return
         Fire(self.world, x, y, self.integrity)
 
     def get_task(self, city):
@@ -61,7 +81,7 @@ class Fire(Object):
 
 
 class Lightning(Object):
-    symbol = "z"
+    icon_symbol = "z"
     name = "Lightning"
     default_description = "It is before the Thunder."
     size = 1
@@ -82,6 +102,7 @@ class Lightning(Object):
             for struc in strucs:
                 struc.fire_act(power)
         self.qdel()
+
 
 class Resource(Object):
     harvestable = False
@@ -141,9 +162,9 @@ class Tall_Grass(Resource):
     name = "Tall_Grass"
     default_description = "A grass to eat when hungy."
     size = 3
-    priority = 0
+    priority = 2
 
-    symbol = "|"
+    icon_symbol = "|"
 
     harvestable = True
     allow_peasants = True
@@ -159,7 +180,7 @@ class Tall_Grass(Resource):
 
 
 class Forest(Resource):
-    symbol = "^"
+    icon_symbol = "^"
     name = "Forest"
     default_description = "A place for trees to go, for a Lumberjack to cut."
     size = 10
@@ -178,7 +199,9 @@ class Forest(Resource):
 
 
 class Mountain(Resource):
-    symbol = "A"
+    icon_symbol = "A"
+    icon_color = "gray26"
+    block_overlays = True
     name = "Mountain"
     default_description = "A rock of rocks, that is rockier than most."
     obstruction = True
@@ -194,12 +217,13 @@ class Mountain(Resource):
 
 
 class Iron_Deposit(Resource):
+    icon_symbol = "i"
+    icon_color = "gray99"
     name = "Iron_Deposit"
     default_description = "It has iron in it!"
     obstruction = True
     size = 3
-    priority = 0
-    symbol = "i"
+    priority = 2
 
     harvestable = True
     allow_peasants = False
@@ -211,12 +235,13 @@ class Iron_Deposit(Resource):
 
 
 class Gold_Deposit(Resource):
+    icon_symbol = "g"
+    icon_color = "gold"
     name = "Gold_Deposit"
     default_description = "It has gold in it!"
     obstruction = True
     size = 3
-    priority = 0
-    symbol = "g"
+    priority = 2
 
     harvestable = True
     allow_peasants = False

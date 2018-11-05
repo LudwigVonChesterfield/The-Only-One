@@ -1,18 +1,22 @@
-import code.Globals
-
 import random
 import copy
+
+# Order of these is indeed important.
+import code.Globals as Globals
+
 
 def prob(prob):
     if(random.randrange(1, 100) <= prob):
         return True
     return False
 
+
 def is_instance_in_list(instance, list_):
     for inst in list_:
         if(isinstance(instance, inst)):
             return True
     return False
+
 
 def pick_weighted(sequence):
     choices = []
@@ -22,14 +26,10 @@ def pick_weighted(sequence):
             choices.append(el)
     return random.choice(choices)
 
+
 def clamp(val, min_, max_):
     return min([max([val, min_]), max_])
 
-def find_in_list(list, obj):
-    for item in list:
-        if(item == obj):
-            return True
-    return False
 
 def get_all_subclasses(cls):
     all_subclasses = []
@@ -40,8 +40,10 @@ def get_all_subclasses(cls):
 
     return all_subclasses
 
-def get_contents(atom):
-    return atom.contents
+
+def text_to_path(text):
+    return Globals.atoms_by_name[text]
+
 
 def sort_by_priority(to_sort: list):
     if(not to_sort):  # Safety measures.
@@ -58,6 +60,3 @@ def sort_by_priority(to_sort: list):
         atoms.append(max_atom)
         atom_list.remove(max_atom)
     return atoms
-
-def text_to_path(text):
-    return Globals.atoms_by_name[text]
