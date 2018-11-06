@@ -399,11 +399,6 @@ class World:
     def process(self):
         self.processing = True
         self.process_time()
-        if(prob(1)):
-            if(prob(1)):
-                Citizens(self.get_turf(random.randrange(0, 29),
-                         random.randrange(0, 29))
-                         )
         self.processing = False
 
     def process_time(self):
@@ -592,10 +587,10 @@ class Atom:
     def get_distance(self, to_dist):
         """
         Returns geometric distance from self to to_dist,
-        if self in contents of to_dist returns 0.
+        if self in contents of to_dist returns -1.
         """
         if(self in to_dist.contents):
-            return 0
+            return -1
         return math.sqrt((to_dist.x - self.x)**2 + (to_dist.y - self.y)**2)
 
     def move_atom_to(self, loc):
@@ -1132,14 +1127,25 @@ class Tool(Object):
     res_quality = 1.0  # Chisel should have higher quality, since it makes out of stone.
 
     def __init__(self, loc, materials={"wood" : 5}, quality_modifier=1):
-        self.loc = loc
+        self.move_atom_to(loc)
         self.materials = materials
         self.quality = random.uniform(1.5, 2.5) * quality_modifier
+
+    def move_atom_to(self, loc):
+        if(self.loc and self in self.loc.contents):
+            self.loc.contents.remove(self)
+        if(self.loc and self in self.loc.inventory):
+            self.loc.inventory.remove(self)
+        self.loc = loc
+        self.loc.contents.append(self)
+        self.loc.inventory.append(self)
 
     def qdel(self):
         self.qdeling = True
         if(self in self.loc.inventory):
             self.loc.inventory.remove(self)
+        if(self in self.loc.contents):
+            self.loc.contents.remove(self)
         del self
 
 
@@ -1431,12 +1437,12 @@ class City(Object):
 
             cur_priority = cur_priority + 1
 
-        if(len(self.citizens) > 30):
+        """if(len(self.citizens) > 30):
             cit = Citizens(self.loc, self.faction)
             cit.resources["food"] = 0
             for c in range(5):
                 cit.add_citizen("Peasant")
-                self.remove_citizen(None)
+                self.remove_citizen(None)"""
 
         if(self.resources["food"] > 30 and actual_food_supply - 1 > actual_food_required and len(self.citizens) < self.max_population):
             self.add_citizen("Toddler")
@@ -1477,25 +1483,11 @@ class City(Object):
                 l = l + cit.display_name + " "
             print(l + "[" + str(len(self.citizens)) + "]")
 
-    def add_citizen(self, job):
-        citizen = None
-        if(job == "Toddler"):
-            citizen = Toddler(self, job)
-        else:
-            citizen = Citizen(self, job)
-        citizen.try_equip()
+    def add_citizen(self, citizen):
+        self.citizens.append(citizen)
 
     def remove_citizen(self, citizen_):
-        if(citizen_):
-            if(citizen_.tool):
-                self.inventory.append(citizen_.tool)
-                citizen_.tool = None
-            citizen_.qdel()
-            del citizen_
-        elif(len(self.citizens) > 0):
-            citizen_ = random.choice(self.citizens)
-            citizen_.qdel()
-            del citizen_
+        self.citizens.remove(citizen_)
         if(len(self.citizens) == 0):
             self.qdel()
             del self
@@ -1682,13 +1674,41 @@ class Mine(Structure):
 
 # Mobs.
 class Citizen(Mob):
+    ### ANDREW NOTICE THIS ###
+    """
+    LE DOCUMENTATION:
+
+    citizen personal_tasks()
+    citizen gets task from city
+    citizen walks to task["walk_to"] onto task["distance"] distance
+    citizen tries to perform
+    if not - next turn he will try again.
+    if yes - remove task
+    """
+
     icon_symbol = ""
-    max_actions_to_perform = 2
+    max_actions_to_perform = 3
+    work_per_action_time = 2  # 2 actions per action_time(hour).
     priority = 0
 
-    def __init__(self, loc, job):
-        self.loc = None
-        self.move_atom_to(loc)
+    needs_processing = True
+    action_time = 1
+
+    def __init__(self, loc, job, city=None):
+        super().__init__(loc)
+        self.resources = {"food" : 0,
+                          "wood" : 0,
+                          "stone" : 0,
+                          "iron" : 0,
+                          "gold" : 0}
+
+        self.city = None
+        if(city):
+            self.join_city(city)
+
+        self.tasks = []
+        self.target_task = None  # Task given by city.
+
         self.id = str(random.randrange(1, 999))
         self.actions_to_perform = self.max_actions_to_perform
 
@@ -1707,73 +1727,56 @@ class Citizen(Mob):
         self.display_name = self.job + " " + self.id
         self.tool = None
 
-    def move_atom_to(self, loc):
-        if(self.loc):  # We are already initialized, and have a loc.
-            if(self in self.loc.contents):
-                self.loc.contents.remove(self)
-            if(self in self.loc.citizens):
-                self.loc.citizens.remove(self)
+    def join_city(self, city):
+        self.city = city
+        self.city.add_citizen(self)
 
-        self.loc = loc
-        self.loc.contents.append(self)
-        self.world = self.loc.world
-        self.x = loc.x
-        self.y = loc.y
-        # Currently citizens can't be bothered to move out of the town/ Citizens mob.self
-        # So this bootleg makes sense.
-        self.loc.citizens.append(self)
+    def leave_city(self):
+        self.city.remove_citizen(self)
+        self.city = None
+
+    def get_personal_tasks(self):
+        if(self.resources["food"] == 0):  # If no food left in pockets, grab a full day worth of meals.
+            self.tasks.append({"priority": 1, "task": "grab", "res_required": {"food": round(self.hunger_rate * self.action_time) * 24}, "target": self.city})
+        if(self.saturation < self.max_saturation):
+            self.tasks.append({"priority": 1, "task": "eat", "res_required": {"food": self.max_saturation - self.saturation}, "target": self})
+        if(self.actions_to_perform <= 0):
+            self.tasks.append({"priority": 1, "task": "rest"})
 
     def life(self):
-        self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
-        if(prob(self.health)):  # A healthy spirit in a healthy body.
-            self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
-
-        self.saturation = max(self.saturation - round(self.hunger_rate * self.loc.action_time), 0)
-        to_grab = min([self.max_saturation - self.saturation, self.loc.resources["food"]])
-        self.loc.resources["food"] = max([self.loc.resources["food"] - to_grab, 0])
-        self.saturation = self.saturation + to_grab
+        self.saturation = max(self.saturation - round(self.hunger_rate * self.action_time), 0)
         self.age_by(self.loc.action_time)
 
         if(self.actions_to_perform <= 0):  # OVERWORKING: Citizens can work more than they should, but they will die quicker.
             if(prob(round((self.age / 8760) * abs(self.actions_to_perform)))):
-                self.crumble(abs(self.actions_to_perform))
-                return False
+                return not self.crumble(abs(self.actions_to_perform))
 
         if(self.saturation == 0):
             self.malnutrition += 1 + (self.age // 8760) # Age in years.
             if(prob(self.malnutrition)):
-                self.crumble(self.malnutrition)
-                return False # Dead. Gray dead.
+                return not self.crumble(self.malnutrition)
 
         if(prob(self.age // 8760)): # Sometimes they just die.
-            self.crumble(self.age // 87600)
-            return False
+            return not self.crumble(self.age // 87600)
 
         if(self.malnutrition > 0):
             self.malnutrition = max([self.malnutrition - round(self.saturation / (self.max_saturation + 0.0001)), 0])
 
+        self.get_personal_tasks()
+        self.get_target_task()
+
+        for i in range(self.work_per_action_time):
+            if(not len(self.tasks)):
+                break
+            for task in self.tasks:
+                self.perform_task()
+
+
         return True # If it didn't die this iteration.
 
-    def age_by(self, time):
-        if(prob(time)):  # Special actions ensue.
-            self.quality_modifier += 0.1
-        self.age += time  # Normal behavior.
+    def get_target_task(self):
 
-    def qdel(self):
-        self.qdeling = True
-        if(self.tool):
-            self.tool.qdel()
-            tool = None
-        if(self.loc):
-            if(self in self.loc.citizens):
-                self.loc.citizens.remove(self)
-            if(self in self.loc.contents):
-                self.loc.contents.remove(self)
-        self.loc = None
-        # self.world = None  # They don't have world var as of yet.
-        del self
-
-    def perform_task(self, strucs, task):
+    def perform_task(self, task):
         if(task["task"] == "harvest"):
             return self.harvest(task["target"])
         elif(task["task"] == "create"):
@@ -1788,7 +1791,7 @@ class Citizen(Mob):
                 look_for = [Rocky]
             if(task["target"] == House):
                 look_for = [Plains, Hills]
-            for struc in strucs:
+            for struc in self.world.get_region_contents(self.x, self.y, 1, 1):
                 if(is_instance_in_list(struc, look_for)):
                     return self.build(task["res_required"], task["target"], self.world.get_turf(struc.x, struc.y))
             return False
@@ -1802,8 +1805,14 @@ class Citizen(Mob):
             return self.gift(task["res_required"], task["target"])
         elif(task["task"] == "claim"):
             return self.claim(task["target"])
-        elif(task["task"] == "breal"):
+        elif(task["task"] == "break"):
             return self.break_tool(task["target"])
+        elif(task["task"] == "eat"):
+            return self.eat(task["res_required"], task["target"])
+        elif(task["task"] == "grab"):
+            return self.grab(task["res_required"], task["target"])
+        elif(task["task"] == "equip"):
+            return self.equip(task["res_required"], task["target"])
         return False
 
 
@@ -1825,7 +1834,7 @@ class Citizen(Mob):
         if(self.tool):
             modifier = modifier * self.tool.res_quality
 
-        self.loc.inventory.append(item_type(self.loc, resources_required, modifier))
+        item_type(self, resources_required, modifier)
         self.actions_to_perform -= 1
         return True
 
@@ -1856,13 +1865,19 @@ class Citizen(Mob):
                 return True
         return False
 
-    def rest(self, target):
+    def rest(self):
         if(self.actions_to_perform == self.max_actions_to_perform):
             return False
+        for coord in self.world.get_region_coordinates(self.x, self.y, 1, 1):
+            coord_list = coord_to_list(coord)
+            x_ = coord_list["x"]
+            y_ = coord_list["y"]
         if(target.been_used):
             return False
         else:
-            self.actions_to_perform = min([self.actions_to_perform + 2, self.max_actions_to_perform])
+            self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
+            if(prob(self.health)):  # A healthy spirit in a healthy body.
+                self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
             self.health = min([self.health + 1, self.max_health])
             return True
 
@@ -1898,12 +1913,12 @@ class Citizen(Mob):
             target.faction = self.loc.faction
             self.loc.faction.add_to_faction(target)
             target.update_icon()
-        elif(not target.crumble(1)):  # By "capturing" it, we of course mean murdering it slightly.
+        if(self.destroy(target)):  # By "capturing" it, we of course mean murdering it slightly.
             target.faction.adjust_relationship(self.loc.faction, -30)  # I mean claiming other's territory is quite a threat.
             target.faction.members.remove(target)
             target.faction = None
             target.update_icon()
-        self.actions_to_perform -= 1
+        # self.actions_to_perform -= 1  # Claiming neutral territory is easy peasy.
         return True
 
     def break_tool(self, target):
@@ -1914,6 +1929,45 @@ class Citizen(Mob):
         del target
         return True
 
+    def grab(self, resources_required, target):
+        """
+        Grab all the resources_required from target's
+        resources.
+        """
+        for res in resources_required:
+            if(target.resources[res] < resources_required[res]):
+                return False
+        eaten = 0
+        for res in resources_required:
+            target.resources[res] -= resources_required[res]
+            self.resources[res] += resources_required[res]
+        self.saturation = min([self.max_saturation, self.saturation + eaten])
+        return True  # Grabbing item is not an action.
+
+    def eat(self, resources_required, target):
+        """
+        Eat as much as specified in res_required.
+        Eat from target's resources.
+        """
+        for res in resources_required:
+            if(self.resources[res] < resources_required[res]):
+                return False
+        eaten = 0
+        for res in resources_required:
+            self.loc.resources[res] -= resources_required[res]
+            eaten += resources_required[res]
+        self.saturation = min([self.max_saturation, self.saturation + eaten])
+        return True  # Eating doesn't tak an action, come on.
+
+    def equip(self, tool, target):
+        """
+        Gets tool from target and equips it.
+        We do return our old tool though.
+        """
+        if(self.tool):
+            self.tool.move_atom_to(target)
+        tool.move_atom_to(self)
+        self.tool = tool
 
     def crumble(self, severity):
         self.health = self.health - severity
@@ -2019,22 +2073,37 @@ class Citizen(Mob):
         self.job = job
         self.icon_symbol = job[0]  # Lifehack.
         self.display_name = self.job + " " + self.id
-        if(self.tool):
-            self.loc.inventory.append(self.tool)
-        self.try_equip()
+        self.find_tool()
 
-    def try_equip(self):
-        for tool in self.loc.inventory:
-            if(not isinstance(tool, Tool)):
+    def find_tool(self):
+        if(not self.city):
+            return
+        for tool in self.city.inventory:
+            if(not isinstance(too, Tool)):
                 continue
             if(tool.job != self.job):
                 continue
             if(tool.quality > self.get_tool_quality(self.job)):
-                # print("Boosted my productivity by: " + str(tool.quality - self.get_tool_quality(self.job)))
-                if(self.tool):
-                    self.loc.inventory.append(self.tool)
-                self.tool = tool
-                self.loc.inventory.remove(self.tool)
+                self.tasks.append({"priority": 1, "task": "equip", "res_required": tool, "target": self.city})
+
+    def age_by(self, time):
+        if(prob(time)):  # Special actions ensue.
+            self.quality_modifier += 0.1
+        self.age += time  # Normal behavior.
+
+    def qdel(self):
+        self.qdeling = True
+        if(self.tool):
+            if(self.city):
+                self.city.inventory.append(self.tool)
+                self.tool = None
+            else:
+                self.tool.qdel()
+                tool = None
+        if(self.city):
+            self.leave_city(self.city)
+        super().qdel()
+        del self
 
 class Toddler(Citizen):
     icon_symbol = "t"
@@ -2074,7 +2143,7 @@ class Toddler(Citizen):
 
     def become_adult(self):
         # Read somewhere above about the -2 -2.
-        peasant = Citizen(self.loc, "Peasant")
+        peasant = Citizen(self.loc, "Peasant", city=self.city)
         peasant.health = self.health
         peasant.age = self.age
 
@@ -2101,194 +2170,6 @@ class Toddler(Citizen):
                 self.tool = tool
                 self.loc.inventory.remove(self.tool)
                 self.actions_to_perform -= 1
-
-
-class Citizens(Mob):
-    icon_symbol = "o"
-    icon_color = "grey"
-    name = "Citizens"
-    default_description = "A bunch of people walking around and about."
-    priority = 29
-    size = 1
-    starting_citizens = 5
-
-    needs_processing = True
-    action_time = 1
-
-    def __init__(self, loc, faction=None, target=None):
-        if(faction):
-            self.faction = faction
-            self.faction.add_to_faction(self)
-        else:
-            self.faction = Faction(self)
-
-        super().__init__(loc)
-        self.try_new = 3
-        self.citizens = []
-        self.inventory = []
-        self.target = target
-        self.resources = {"food" : 50,
-                          "wood" : 0,
-                          "stone" : 0,
-                          "iron" : 0,
-                          "gold" : 0}
-        for N in range(self.starting_citizens):
-            self.add_citizen("Peasant")
-
-    def qdel(self):
-        self.qdeling = True
-        self.inventory = []
-        self.target = None
-        for cit in self.citizens:
-            cit.qdel()
-            del cit
-        self.citizens = []
-        super().qdel()
-
-    def life(self):
-        if(self.resources["food"] > 100):
-            self.resources["food"] = max([self.resources["food"] - 50, 0])
-            self.add_citizen("Toddler")
-
-        for citizen in self.citizens:
-            if(not citizen.qdeling):
-                citizen.life()
-
-        if(self.qdeling):
-            del self
-            return
-
-        self.handle_ai_movement()
-
-        self.size = int(len(self.citizens) // 10)
-
-        if(self.world):
-            if(self.world.is_overcrowded(self.x, self.y, 0)):
-                for struc in self.world.get_tile_contents(self.x, self.y):
-                    if(struc == self):
-                        continue
-                    if(struc.crumble(self.size)):
-                        return
-        self.update_icon()
-
-    def add_citizen(self, job):
-        citizen = None
-        if(job == "Toddler"):
-            citizen = Toddler(self, job)
-        else:
-            citizen = Citizen(self, job) #Huehuehue. -2 -2 won't be qdeled.
-        citizen.try_equip()
-
-    def remove_citizen(self, citizen_):
-        if(citizen_):
-            if(citizen_.tool):
-                self.inventory.append(citizen_.tool)
-                citizen_.tool = None
-            citizen_.qdel()
-            del citizen_
-        elif(len(self.citizens) > 0):
-            citizen_ = random.choice(self.citizens)
-            citizen_.qdel()
-            del citizen_
-        if(len(self.citizens) == 0):
-            self.qdel()
-            del self
-    
-    def handle_ai_movement(self):
-        self.resources["food"] = max([self.resources["food"] - (len(self.citizens) * self.action_time), 0])
-        if(self.target):
-            self.move_towards_to(self.world)
-            return
-        spot_x = self.x
-        spot_y = self.y
-        best_index = 0
-        coords = self.world.get_region_coordinates(self.x, self.y, 3, 3)
-        random.shuffle(coords)
-        for coord in coords:
-            coord = coord_to_list(coord)
-            x_ = coord["x"]
-            y_ = coord["y"]
-            if(not self.world.coords_sanitized(x_, y_)):
-                continue
-            ind = self.get_spot_quality_index(x_, y_)
-            if(ind > best_index):
-                spot_x = x_
-                spot_y = y_
-                best_index = ind
-        if(spot_x == self.x and spot_y == self.y):
-            self.attempt_settle()
-            return
-        if(not self.move_towards_to(self.world.get_turf(spot_x, spot_y))):
-           self.attempt_settle()
-
-    def get_spot_quality_index(self, x, y):
-        quality = 0
-        #requirements = ["Forest", "Tall_Grass", "Tall_Grass", "Tall_Grass"]
-        if(self.world.is_overcrowded(x, y, 5 + int(len(self.citizens) // 10))):
-            return -10000 # I don't think it will ever get any lower.
-        for struc in self.world.get_tile_contents(x, y):
-            if(isinstance(struc, Tall_Grass)):
-                #requirements.remove("Tall_Grass")
-                quality = quality + 3 * struc.resource_multiplier
-            elif(isinstance(struc, Forest)):
-                #requirements.remove("Forest")
-                quality = quality + 2 * struc.resource_multiplier
-            elif(isinstance(struc, Mountain)):
-                quality = quality + 2 * struc.resource_multiplier
-            elif(isinstance(struc, Iron_Deposit)):
-                quality = quality + 1 * struc.resource_multiplier
-            elif(isinstance(struc, Gold_Deposit)):
-                quality = quality + 1 * struc.resource_multiplier
-            elif(isinstance(struc, City)):
-                if(struc.faction != self.faction):
-                    quality += 10
-                elif(self.resources["food"] >= 3 * len(self.citizens) * self.action_time):
-                    quality = quality + 10
-                else:
-                    quality = quality - 10 # Citizens won't move into cities if they can continue on searching for a spot.
-        #if(len(requirements)):
-            #return 0
-        return quality
-
-    def attempt_settle(self):
-        strucs = self.world.get_tile_contents(self.x, self.y)
-        for struc in strucs:
-            if(isinstance(struc, City)):
-                return
-        if(self.world.is_overcrowded(self.x, self.y, 5 + int(len(self.citizens) // 10))):
-            return
-        city = City(self.loc, self.faction)
-        city.resources = self.resources
-        for citizen in city.citizens:
-            citizen.qdel()
-            del citizen
-        for citizen in self.citizens:
-            citizen.loc = city
-            city.citizens.append(citizen)
-        self.citizens = []
-        self.qdel()
-        del self
-
-    def transfer_resources_to(self, resource_list, target):
-        for resource in resource_list:
-            target.resources[resource] = target.resources[resource] + resource_list[resource]
-
-    def get_icon(self):
-        return {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
-
-    def electrocute_act(self, severity, source):
-        Fire(self.loc, severity)
-        return False  # It does not actually conduct electricity.
-
-    def fire_act(self, severity):
-        for cit in range(severity):
-            if(not len(self.citizens)):
-                return False
-            citizen = random.choice(self.citizens)
-            if(not citizen.qdeling):
-                citizen.fire_act(severity)
-                return True
-        return False
 
 
 #GUI.
