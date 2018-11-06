@@ -14,12 +14,11 @@ log = ""
 sqrt_2 = math.sqrt(2)
 
 runtime = True
-to_sleep_time = 10
+to_sleep_time = 0
 freeze_time = False
 
-city_output = True
+city_output = False
 
-atoms = []
 atoms_by_name = {}
 
 tools_by_job = {}
@@ -116,10 +115,6 @@ def coord_to_list(coord):
     return {"x": int(coord[0:y - 2]), "y": int(coord[y:len(coord)])}
 
 
-def get_distance(x1, y1, x2, y2):
-    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-
 def get_vector(x1, x2):
     return sign(x2 - x1)
 
@@ -175,6 +170,7 @@ def master_controller():
             if(world.initiated):
                 if(world.processing):
                     continue
+                time.sleep(to_sleep_time / 1000)
                 world.process()
 
 
@@ -186,6 +182,8 @@ class World:
     max_x = 50
     max_y = 34
     z = -1
+    base_turf = "Plains"  # Default Turf.
+    base_area = "Area"
     allowed_turfs = {"Plains": 100, "Hills": 25, "Rocky": 10}
     struc_per_tile = 3
     struc_chance_per_tile = 75
@@ -209,7 +207,7 @@ class World:
         if(not self.coords_sanitized(x_, y_)):
             return
         mods.append("from_world")
-        strucs = self.get_tile_contents(x_, y_)
+        strucs = self.get_all_tile_contents(x_, y_)
         for struc in strucs:
             # If they override click, they issue their own code,
             # stop click handling from here.
@@ -238,24 +236,49 @@ class World:
         tile = self.get_turf(x, y)
         if(not tile):
             return False
-        strucs = self.get_tile_contents(x, y)
         overall_size = 0
-        for struc in strucs:
-            if(isinstance(struc, Turf)):
-                continue
+        for struc in tile.contents:
             overall_size = overall_size + struc.size
         if(overall_size + additional_size > tile.size):
             return True
         return False
 
     def get_turf(self, x, y):
-        for struc in self.get_tile_contents(x, y):
-            if(isinstance(struc, Turf)):
-                return struc
+        """
+        Returns the Turf at given coordinates, or
+        None if such coordinates are not applicable.
+        """
+        if(self.coords_sanitized(x, y)):
+            return self.map_c[x_y_to_coord(x, y)]["Turf"]
+        return None
+
+    def get_area(self, x, y):
+        """
+        Returns the Area at given coordinates, or
+        None if such coordinates are not applicable.
+        """
+        if(self.coords_sanitized(x, y)):
+            return self.map_c[x_y_to_coord(x, y)]["Area"]
+        return None
 
     def get_tile_contents(self, x, y):
-        if(self.coords_sanitized(x, y)):
-            return self.map_c[x_y_to_coord(x, y)]
+        """
+        Returns contents of a Turf at given
+        coordinates, or None if such turf
+        doesn't exist.
+        """
+        turf = self.get_turf(x, y)
+        if(turf):
+            return turf.contents
+        return None
+
+    def get_all_tile_contents(self, x, y):
+        """
+        Returns Turf and Turf's contents.
+        """
+        turf = self.get_turf(x, y)
+        return [turf] + turf.contents
+        
 
     def get_region_coordinates(self, x, y, x_range, y_range):
         coords = []
@@ -272,14 +295,15 @@ class World:
             for y_ in range(y - y_range, y + y_range + 1):
                 if(not self.coords_sanitized(x_, y_)):
                     continue
-                for content in self.get_tile_contents(x_, y_):
+                for content in self.get_all_tile_contents(x_, y_):
                     contents.append(content)
         return contents
 
     def generate_world(self):
         for y in range(self.max_y):
             for x in range(self.max_x):
-                self.map_c[x_y_to_coord(x, y)] = []
+                # self.map_c[x_y_to_coord(x, y)] = {"Turf": text_to_path(self.base_turf)({"x": x, "y": y, "world": self}), "Area": text_to_path(self.base_area)({"x": x, "y": y, "world": self})}
+                self.map_c[x_y_to_coord(x, y)] = {"Turf": text_to_path(self.base_turf)({"x": x, "y": y, "world": self})}
                 self.generate_tile(x, y)
 
         for L in range(self.lakes):
@@ -298,26 +322,28 @@ class World:
         return text_to_path(pick_weighted(self.allowed_turfs))
 
     def generate_tile(self, x, y):
-        new_turf = self.generate_turf_type()(self, x, y)
+        new_turf = self.generate_turf_type()(self.get_turf(x, y))
+
         if(len(new_turf.allowed_contents) == 0):
             return
+
         for N in range(self.struc_per_tile):
             if(prob(self.struc_chance_per_tile)):
-                new_turf.generate_contents()(self, x, y)
+                new_turf.generate_contents()(new_turf)
 
     def update_coord_icon(self, x, y):
         if(not self.initiated):
             return
 
-        tile = self.get_tile_contents(x, y)
+        turf = self.get_turf(x, y)
 
-        overlays = []
+        overlays = [turf]  # Turf is always visible.
         icons = []
 
-        max_priority = 0
-        max_atom = None
+        max_priority = turf.priority
+        max_atom = turf
 
-        for atom in tile:
+        for atom in turf.contents:
             if(atom.priority > max_priority):
                 max_priority = atom.priority
                 max_atom = atom
@@ -358,9 +384,6 @@ class World:
                     if(not prob(chance)):
                         continue
                     if(turf):
-                        tile = self.get_turf(x_, y_)
-                        tile.qdel()
-                        del tile
                         tile_c = self.get_tile_contents(x_, y_)
                         for struc in tile_c:
                             if(struc.name not in tile_type.allowed_contents):
@@ -371,15 +394,15 @@ class World:
                         tile = self.get_turf(x_, y_)
                         if(tile_type.name not in tile.allowed_contents):
                             continue
-                    tile_type(self, x_, y_)
+                    tile_type(self.get_turf(x_, y_))
 
     def process(self):
         self.processing = True
         self.process_time()
         if(prob(1)):
             if(prob(1)):
-                Citizens(self, random.randrange(0, 29),
-                         random.randrange(0, 29)
+                Citizens(self.get_turf(random.randrange(0, 29),
+                         random.randrange(0, 29))
                          )
         self.processing = False
 
@@ -477,21 +500,24 @@ class Atom:
 
     action_time = 0
 
-    def __init__(self, loc, x, y):
+    def __init__(self, loc):
         self.processing = False
         self.qdeling = False
-        self.x = - 1
+
+        self.x = -1
         self.y = -1
         self.loc = None
-        self.world = loc.get_world()
+        self.world = None
+
         self.contents = []
-        self.move_atom_to(loc, x, y)
-        self.last_action = self.world.time
-        self.description = self.default_description
+        self.integrity = self.size
+        self.move_atom_to(loc)
+
         # Since "name" is more of a type, really.
         self.display_name = self.name
-        self.integrity = self.size
-        atoms.append(self)
+        self.description = self.default_description
+
+        self.last_action = self.world.time
         if(self.needs_processing):
             self.processing = True
             self.world.process_atoms.append(self)
@@ -548,13 +574,10 @@ class Atom:
         return str(self.icon_symbol) + " [" + self.display_name + "] " + self.default_description
 
     def get_world(self):
-        if(isinstance(loc, World)):
-            return loc
+        if(isinstance(self.loc, World)):
+            return self.loc
         else:
             return get_world()
-
-    def get_tile_contents(self, x, y):
-        return self.contents
 
     def bump(self, bumped_with):
         # Bumped with is the thing that called the bump proc.
@@ -566,15 +589,30 @@ class Atom:
     def does_obstruct(self, atom):
         return self.obstruction
 
-    def move_atom_to(self, world, x, y):
-        self_coord = x_y_to_coord(self.x, self.y)
-        if((self_coord in self.world.map_c) and (self in self.world.map_c[self_coord])):
-            self.world.map_c[self_coord].remove(self)
+    def get_distance(self, to_dist):
+        """
+        Returns geometric distance from self to to_dist,
+        if self in contents of to_dist returns 0.
+        """
+        if(self in to_dist.contents):
+            return 0
+        return math.sqrt((to_dist.x - self.x)**2 + (to_dist.y - self.y)**2)
+
+    def move_atom_to(self, loc):
+        old_loc = self.loc
+        if(old_loc and self in old_loc.contents):
+            old_loc.contents.remove(self)
             self.update_icon()
 
-        if(self.world.coords_sanitized(x, y)):
-            overcrowded = self.world.is_overcrowded(x, y, 0)
-            for struc in self.world.get_tile_contents(x, y):
+        self.loc = loc
+        self.loc.contents.append(self)
+        self.world = loc.get_world()
+        self.x = loc.x
+        self.y = loc.y
+
+        if(isinstance(self.loc, Turf)):
+            overcrowded = self.world.is_overcrowded(self.x, self.y, 0)
+            for struc in self.loc.contents:
                 if(struc == self):
                     continue
                 if(overcrowded):
@@ -582,35 +620,33 @@ class Atom:
                         continue
                 struc.bump(self)
                 self.bump_into(struc)
-            world.map_c[x_y_to_coord(x, y)].append(self)
 
-        self.loc = world
-        self.loc.contents.append(self)
-        self.x = x
-        self.y = y
         self.update_icon()
 
-    def attempt_move_to(self, world, x, y):
-        for struc in world.get_tile_contents(x, y):
+    def attempt_move_to(self, loc):
+        for struc in self.loc.contents:
             if(struc.does_obstruct(self)):
                 return False
 
         # sqrt_2 = math.sqrt(2), because diagonal tiles.
-        if(get_distance(self.x, self.y, x, y) > sqrt_2):
+        if(self.get_distance(loc) > sqrt_2):
             return False
 
-        self.move_atom_to(world, x, y)
+        self.move_atom_to(loc)
         return True
 
-    def move_towards_to(self, world, x, y):
+    def move_towards_to(self, loc):
+        """
+        This works only if not inside something.
+        """
         # Set this to something higher if you want some wacky shit.
         dummy_moves = 3
 
-        x_ = self.x + get_vector(self.x, x)
-        y_ = self.y + get_vector(self.y, y)
+        x_ = self.x + get_vector(self.x, loc.x)
+        y_ = self.y + get_vector(self.y, loc.y)
 
         while(dummy_moves):
-            if(not self.attempt_move_to(world, x_, y_)):
+            if(not self.attempt_move_to(self.world.get_turf(x_, y_))):
                 x_t = self.x + random.randrange(-1, 1)
                 y_t = self.y + random.randrange(-1, 1)
                 if(self.world.coords_sanitized(x_t, y_t)):
@@ -658,27 +694,22 @@ class Atom:
 
     def qdel(self):
         self.qdeling = True
-        if(self in atoms):
-            atoms.remove(self)
 
-        if(self.processing and (self in self.world.process_atoms)):
+        if(self.processing and self.world and (self in self.world.process_atoms)):
             self.world.process_atoms.remove(self)
-
-        self_coord = x_y_to_coord(self.x, self.y)
-        if(self.world and (self_coord in self.world.map_c) and (self in self.world.map_c[self_coord])):
-            self.world.map_c[self_coord].remove(self)
 
         if(self.loc and self in self.loc.contents):
             self.loc.contents.remove(self)
 
         self.update_icon()
+
         self.loc = None
         self.world = None
         del self
 
     def update_icon(self):
-        if(isinstance(self.loc, World)):
-            self.loc.update_coord_icon(self.x, self.y)
+        if(self.world):
+            self.world.update_coord_icon(self.x, self.y)
 
     def get_icon(self):
         return {"symbol": self.icon_symbol, "color": self.icon_color, "font": self.icon_font}
@@ -690,17 +721,75 @@ class Area(Atom):
     priority = 0
     obstruction = False
 
+    def move_atom_to(self, loc):
+        if(isinstance(loc, dict)):  # Cheap hacks.
+            self.loc = loc["world"]
+            self.loc.contents.append(self)
+            self.world = self.loc
+            self.x = loc["x"]
+            self.y = loc["y"]
+            return
+        self.loc = loc.get_world()
+        self.loc.contents.append(self)
+        self.world = self.loc
+        self.x = loc.x
+        self.y = loc.y
+
+        old_area = self.world.get_area(self.x, self.y)
+        if(old_area != self):
+            self.world.map_c[x_y_to_coord(self.x, self.y)]["Area"] = self
+            old_area.qdel()
+            del old_area
+
+    def qdel(self):
+        self.qdeling = True
+        self_coord = x_y_to_coord(self.x, self.y)
+        if(self.world and self.world.map_c[self_coord]["Area"] == self):
+            base = text_to_path(self.world.base_area)
+            self.world.map_c[self_coord]["Area"] == base(self)
+        super().qdel()
+
 class Turf(Atom):
     overlayable = True
     priority = 1
     allowed_contents = []
     size = 20  # Turfs are really big.
 
+    def move_atom_to(self, loc):
+        if(isinstance(loc, dict)):  # Cheap hacks.
+            self.loc = loc["world"]
+            self.loc.contents.append(self)
+            self.world = self.loc
+            self.x = loc["x"]
+            self.y = loc["y"]
+            return
+        self.loc = loc.get_world()
+        self.loc.contents.append(self)
+        self.world = self.loc
+        self.x = loc.x
+        self.y = loc.y
+
+        old_turf = self.world.get_turf(self.x, self.y)
+        if(old_turf != self):
+            self.world.map_c[x_y_to_coord(self.x, self.y)]["Turf"] = self
+            old_turf.qdel()
+            del old_turf
+
+        self.update_icon()
+
     def generate_contents(self):
         return text_to_path(pick_weighted(self.allowed_contents))
 
     def crumble(self, severity):
         return False
+
+    def qdel(self):
+        self.qdeling = True
+        self_coord = x_y_to_coord(self.x, self.y)
+        if(self.world and self.world.map_c[self_coord]["Turf"] == self):
+            base = text_to_path(self.world.base_turf)
+            self.world.map_c[self_coord]["Turf"] == base(self)
+        super().qdel()
 
 class Moveable(Atom):
     obstruction = False
@@ -750,8 +839,8 @@ class Water(Turf):
 
     action_time = 1
 
-    def __init__(self, loc, x, y):
-        super().__init__(loc, x, y)
+    def __init__(self, loc):
+        super().__init__(loc)
         self.charge = 0
 
     def process(self):
@@ -768,7 +857,7 @@ class Water(Turf):
             y_ = coord_list["y"]
             if(self.x == x_ and self.y == y_):
                 el_all_on_tile = True
-            strucs = self.world.get_tile_contents(x_, y_)
+            strucs = self.world.get_all_tile_contents(x_, y_)
             for struc in strucs:
                 if(struc == self):
                     continue
@@ -798,7 +887,7 @@ class Nothing(Object):
     icon_symbol = ""
     name = "Nothing"
 
-    def __init__(self, world, x, y):
+    def __init__(self, loc):
         del self
 
 
@@ -815,8 +904,8 @@ class Fire(Object):
     action_time = 3
     needs_processing = True
 
-    def __init__(self, loc, x, y, integrity=3):
-        super().__init__(loc, x, y)
+    def __init__(self, loc, integrity=3):
+        super().__init__(loc)
         self.integrity = int(integrity)
 
     def process(self):
@@ -826,7 +915,7 @@ class Fire(Object):
             coord = coord_to_list(coord)
             x_ = coord["x"]
             y_ = coord["y"]
-            strucs = self.world.get_tile_contents(x_, y_)
+            strucs = self.world.get_all_tile_contents(x_, y_)
             if(x_ == self.x and y_ == self.y):
                 for struc in strucs:
                     if(struc.fire_act(1)):
@@ -840,13 +929,13 @@ class Fire(Object):
         self.crumble(1)
 
     def spread_to(self, x, y):
-        strucs = self.world.get_tile_contents(x, y)
+        strucs = self.world.get_all_tile_contents(x, y)
         for struc in strucs:
             if(isinstance(struc, Water)):
                 return
             if(isinstance(struc, Fire)):
                 return
-        Fire(self.world, x, y, self.integrity)
+        Fire(self.world.get_turf(x, y), self.integrity)
 
     def get_task(self, city):
         return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True}
@@ -864,10 +953,10 @@ class Lightning(Object):
     size = 1
     priority = 100  # Pretty "light".
 
-    def __init__(self, loc, x, y, power=3):
-        super().__init__(loc, x, y)
+    def __init__(self, loc, power=3):
+        super().__init__(loc)
         power = int(power)
-        strucs = self.world.get_tile_contents(self.x, self.y)
+        strucs = self.world.get_all_tile_contents(self.x, self.y)
         for struc in strucs:
             struc.electrocute_act(power, self)
         self.qdel()
@@ -884,8 +973,8 @@ class Resource(Object):
     default_resource_multiplier = 1.0
     def_amount = 0
 
-    def __init__(self, loc, x, y):
-        super().__init__(loc, x, y)
+    def __init__(self, loc):
+        super().__init__(loc)
         self.been_used = False
         self.resource_multiplier = random.uniform(0.7, 1.3) * self.default_resource_multiplier
         self.resourcefulness = self.get_max_resourcefulness()
@@ -949,7 +1038,7 @@ class Tall_Grass(Resource):
         return True
 
     def electrocute_act(self, severity, source):
-        Fire(self.loc, self.x, self.y, severity)
+        Fire(self.loc, severity)
         return False  # It does not actually conduct electricity.
 
 
@@ -972,7 +1061,7 @@ class Forest(Resource):
         return True
 
     def electrocute_act(self, severity, source):
-        Fire(self.loc, self.x, self.y, severity)
+        Fire(self.loc, severity)
         return False  # It does not actually conduct electricity.
 
 
@@ -1042,9 +1131,7 @@ class Tool(Object):
     res_make_of = None  # Chisel makes out of stone, etc.
     res_quality = 1.0  # Chisel should have higher quality, since it makes out of stone.
 
-    def __init__(self, loc, x, y, materials={"wood" : 5}, quality_modifier=1):
-        self.x = x
-        self.y = y
+    def __init__(self, loc, materials={"wood" : 5}, quality_modifier=1):
         self.loc = loc
         self.materials = materials
         self.quality = random.uniform(1.5, 2.5) * quality_modifier
@@ -1136,6 +1223,7 @@ class Saw(Tool):
 class City(Object):
     icon_color = "grey"
     icon_symbol = "1"
+    block_overlays = True
     name = "City"
     default_description = ""  # Uses custom code.
     priority = 30  # Should actually be above mob layer.
@@ -1146,7 +1234,7 @@ class City(Object):
     needs_processing = True
     action_time = 5
 
-    def __init__(self, loc, x, y, faction=None):
+    def __init__(self, loc, faction=None):
         global log
 
         self.faction = faction
@@ -1155,7 +1243,7 @@ class City(Object):
         else:
             self.faction = Faction(self)
 
-        super().__init__(loc, x, y)
+        super().__init__(loc)
         self.display_name = self.name + " " + str(random.randrange(1, 999))
         self.max_population = 10
         self.citizens = []
@@ -1210,7 +1298,7 @@ class City(Object):
             if(atom.resources["food"] < 3 * len(atom.citizens) * atom.action_time):
                 atom.transfer_resources_to(atom.resources, self)
                 for citizen in atom.citizens:
-                    citizen.move_atom_to(self, self.x, self.y)
+                    citizen.move_atom_to(self)
                 atom.citizens = []
                 atom.qdel()
                 del atom
@@ -1288,7 +1376,7 @@ class City(Object):
         for tool in self.inventory:
             if(not isinstance(tool, Tool)):
                 if(not self.tool_request[tool.job] > 0):
-                    self.tasks.append({"priority": 5, "jobs": ["Peasant"], "task": "break", "target": tool, "allowed_peasants": True})
+                    self.tasks.append({"priority": 5, "jobs": ["Carpenter", "Chisel"], "task": "break", "target": tool, "allowed_peasants": False})
 
         for tool_request in self.tool_requests:
             if(self.tool_requests[tool_request] <= 0):
@@ -1337,13 +1425,14 @@ class City(Object):
                             print(citizen.display_name + " performed " + str(task) + " and has: " + str(citizen.actions_to_perform) + " actions left.")
                         if(isinstance(task["target"], Resource) and task["target"].resource == "food" and task["task"] == "harvest"):
                             actual_food_supply += task["target"].resource_multiplier * task["target"].default_resource_multiplier
-                        self.tasks.remove(task)
+                        if(task in self.tasks):
+                            self.tasks.remove(task)
                         break
 
             cur_priority = cur_priority + 1
 
         if(len(self.citizens) > 30):
-            cit = Citizens(self.loc, self.x, self.y, self.faction)
+            cit = Citizens(self.loc, self.faction)
             cit.resources["food"] = 0
             for c in range(5):
                 cit.add_citizen("Peasant")
@@ -1391,9 +1480,9 @@ class City(Object):
     def add_citizen(self, job):
         citizen = None
         if(job == "Toddler"):
-            citizen = Toddler(self, -2, -2, job)
+            citizen = Toddler(self, job)
         else:
-            citizen = Citizen(self, -2, -2, job) #Huehuehue. -2 -2 won't be qdeled.
+            citizen = Citizen(self, job)
         citizen.try_equip()
 
     def remove_citizen(self, citizen_):
@@ -1467,7 +1556,7 @@ class City(Object):
         return return_val
 
     def electrocute_act(self, severity, source):
-        Fire(self.loc, self.x, self.y)
+        Fire(self.loc)
         return False  # It does not actually conduct electricity.
 
 
@@ -1477,11 +1566,11 @@ class Structure(Resource):
     size = 5
     priority = 12
 
-    def __init__(self, loc, x, y, faction=None):
+    def __init__(self, loc, faction=None):
         self.faction = faction
         if(faction):
             faction.add_to_faction(self)
-        super().__init__(loc, x, y)
+        super().__init__(loc)
 
     def get_icon(self):
         return {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
@@ -1504,15 +1593,15 @@ class Construction(Structure):
     name = "Construction"
     default_description = "When Construction will grow up, it will become a big Structure!."
 
-    def __init__(self, loc, x, y, to_construct, struc_type, faction=None):
-        super().__init__(loc, x, y, faction)
+    def __init__(self, loc, to_construct, struc_type, faction=None):
+        super().__init__(loc, faction)
         self.to_construct = to_construct
         self.struc_type = struc_type
 
     def construct(self, severity):
         self.to_construct = max(self.to_construct - severity, 0)
-        if(self.to_construct <= 0):
-            self.struc_type(self.loc, self.x, self.y, self.faction)
+        if(self.to_construct <= 0 and not self.qdeling):
+            self.struc_type(self.loc, self.faction)
             self.qdel()
             del self
 
@@ -1547,7 +1636,7 @@ class House(Structure):
         return True
 
     def electrocute_act(self, severity, source):
-        Fire(self.loc, self.x, self.y)
+        Fire(self.loc)
         return False  # It does not actually conduct electricity.
 
 
@@ -1571,7 +1660,7 @@ class Farm(Structure):
         return True
 
     def electrocute_act(self, severity, source):
-        Fire(self.loc, self.x, self.y)
+        Fire(self.loc)
         return False  # It does not actually conduct electricity.
 
 
@@ -1597,9 +1686,9 @@ class Citizen(Mob):
     max_actions_to_perform = 2
     priority = 0
 
-    def __init__(self, loc, x, y, job):
+    def __init__(self, loc, job):
         self.loc = None
-        self.move_atom_to(loc, x, y)
+        self.move_atom_to(loc)
         self.id = str(random.randrange(1, 999))
         self.actions_to_perform = self.max_actions_to_perform
 
@@ -1618,7 +1707,7 @@ class Citizen(Mob):
         self.display_name = self.job + " " + self.id
         self.tool = None
 
-    def move_atom_to(self, loc, x, y):
+    def move_atom_to(self, loc):
         if(self.loc):  # We are already initialized, and have a loc.
             if(self in self.loc.contents):
                 self.loc.contents.remove(self)
@@ -1627,8 +1716,9 @@ class Citizen(Mob):
 
         self.loc = loc
         self.loc.contents.append(self)
-        self.x = x
-        self.y = y
+        self.world = self.loc.world
+        self.x = loc.x
+        self.y = loc.y
         # Currently citizens can't be bothered to move out of the town/ Citizens mob.self
         # So this bootleg makes sense.
         self.loc.citizens.append(self)
@@ -1700,7 +1790,7 @@ class Citizen(Mob):
                 look_for = [Plains, Hills]
             for struc in strucs:
                 if(is_instance_in_list(struc, look_for)):
-                    return self.build(task["res_required"], task["target"], struc.world, struc.x, struc.y)
+                    return self.build(task["res_required"], task["target"], self.world.get_turf(struc.x, struc.y))
             return False
         elif(task["task"] == "rest"):
             return self.rest(task["target"])
@@ -1712,7 +1802,7 @@ class Citizen(Mob):
             return self.gift(task["res_required"], task["target"])
         elif(task["task"] == "claim"):
             return self.claim(task["target"])
-        elif(task["task"] == "breal"):
+        elif(task["task"] == "break"):
             return self.break_tool(task["target"])
         return False
 
@@ -1735,12 +1825,12 @@ class Citizen(Mob):
         if(self.tool):
             modifier = modifier * self.tool.res_quality
 
-        self.loc.inventory.append(item_type(self.loc, -2, -2, resources_required, modifier))
+        self.loc.inventory.append(item_type(self.loc, resources_required, modifier))
         self.actions_to_perform -= 1
         return True
 
-    def build(self, resources_required, struc_, world, x, y):
-        if(self.loc.world.is_overcrowded(x, y, 5)): # Since most strucs are size 5.
+    def build(self, resources_required, struc_type, loc):
+        if(self.loc.world.is_overcrowded(loc.x, loc.y, 5)): # Since most strucs are size 5.
             return False
         for res in resources_required:
             if(self.loc.resources[res] <= resources_required[res]):
@@ -1748,7 +1838,7 @@ class Citizen(Mob):
         for res in resources_required:
             self.loc.resources[res] = self.loc.resources[res] - resources_required[res]
         self.actions_to_perform -= 1
-        Construction(world, x, y, struc_.work_required, struc_, self.loc.faction)
+        Construction(loc, struc_type.work_required, struc_type, self.loc.faction)
         return True
 
     def construct(self, target):
@@ -1788,7 +1878,7 @@ class Citizen(Mob):
     def kidnap(self, target):
         if(len(target.citizens)):
             citizen = random.choice(target.citizens)
-            citizen.move_atom_to(self.loc, -2, -2)
+            citizen.move_atom_to(self.loc)
             self.actions_to_perform -= 1
             return True
         return False
@@ -1863,7 +1953,7 @@ class Citizen(Mob):
     def required_tools(self, reqs):
         actual_requests = {}
         for req in reqs:
-            actual_requests[req] = int(round(reqs[req]))
+            actual_requests[req] = int(round(reqs[req] * 1.5))
 
         for tool in self.loc.inventory:
             if(not isinstance(tool, Tool)):
@@ -1951,8 +2041,8 @@ class Toddler(Citizen):
     name = "Toddler"
     max_actions_to_perform = 1
 
-    def __init__(self, loc, x, y, job):
-        super().__init__(loc, x, y, "Toddler")  # No matter the job given, a Toddler is a Toddler.
+    def __init__(self, loc, job):
+        super().__init__(loc, "Toddler")  # No matter the job given, a Toddler is a Toddler.
         self.age = 0  # Since citizen is set to 8760.
 
         self.max_health = 1
@@ -1984,7 +2074,7 @@ class Toddler(Citizen):
 
     def become_adult(self):
         # Read somewhere above about the -2 -2.
-        peasant = Citizen(self.loc, -2, -2, "Peasant")
+        peasant = Citizen(self.loc, "Peasant")
         peasant.health = self.health
         peasant.age = self.age
 
@@ -2025,16 +2115,17 @@ class Citizens(Mob):
     needs_processing = True
     action_time = 1
 
-    def __init__(self, loc, x, y, faction=None, target=None):
-        super().__init__(loc, x, y)
-        self.try_new = 3
-        self.citizens = []
-        self.inventory = []
+    def __init__(self, loc, faction=None, target=None):
         if(faction):
             self.faction = faction
             self.faction.add_to_faction(self)
         else:
             self.faction = Faction(self)
+
+        super().__init__(loc)
+        self.try_new = 3
+        self.citizens = []
+        self.inventory = []
         self.target = target
         self.resources = {"food" : 50,
                           "wood" : 0,
@@ -2083,9 +2174,9 @@ class Citizens(Mob):
     def add_citizen(self, job):
         citizen = None
         if(job == "Toddler"):
-            citizen = Toddler(self, -2, -2, job)
+            citizen = Toddler(self, job)
         else:
-            citizen = Citizen(self, -2, -2, job) #Huehuehue. -2 -2 won't be qdeled.
+            citizen = Citizen(self, job) #Huehuehue. -2 -2 won't be qdeled.
         citizen.try_equip()
 
     def remove_citizen(self, citizen_):
@@ -2106,7 +2197,7 @@ class Citizens(Mob):
     def handle_ai_movement(self):
         self.resources["food"] = max([self.resources["food"] - (len(self.citizens) * self.action_time), 0])
         if(self.target):
-            self.move_towards_to(self.world, target.x, target.y)
+            self.move_towards_to(self.world)
             return
         spot_x = self.x
         spot_y = self.y
@@ -2127,7 +2218,7 @@ class Citizens(Mob):
         if(spot_x == self.x and spot_y == self.y):
             self.attempt_settle()
             return
-        if(not self.move_towards_to(self.world, spot_x, spot_y)):
+        if(not self.move_towards_to(self.world.get_turf(spot_x, spot_y))):
            self.attempt_settle()
 
     def get_spot_quality_index(self, x, y):
@@ -2166,7 +2257,7 @@ class Citizens(Mob):
                 return
         if(self.world.is_overcrowded(self.x, self.y, 5 + int(len(self.citizens) // 10))):
             return
-        city = City(self.loc, self.x, self.y, self.faction)
+        city = City(self.loc, self.faction)
         city.resources = self.resources
         for citizen in city.citizens:
             citizen.qdel()
@@ -2181,6 +2272,13 @@ class Citizens(Mob):
     def transfer_resources_to(self, resource_list, target):
         for resource in resource_list:
             target.resources[resource] = target.resources[resource] + resource_list[resource]
+
+    def get_icon(self):
+        return {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
+
+    def electrocute_act(self, severity, source):
+        Fire(self.loc, severity)
+        return False  # It does not actually conduct electricity.
 
     def fire_act(self, severity):
         for cit in range(severity):
@@ -2238,14 +2336,13 @@ class Examine(GUI):
         self.x_coord = int(round(x / self.parent.pixels_per_tile))
         self.y_coord = int(round(y / self.parent.pixels_per_tile))
 
-        self.structures = sort_by_priority(copy.deepcopy(self.parent.cur_world.get_tile_contents(self.x_coord, self.y_coord)))
+        self.structures = sort_by_priority(copy.deepcopy(self.parent.cur_world.get_all_tile_contents(self.x_coord, self.y_coord)))
 
         self.wind.title(u'The Tile (%d, %d)' % (self.x_coord, self.y_coord))
         self.wind_wid = max([int(round(4 * self.parent.pixels_per_tile)), self.parent.max_coord_lenght])
         self.wind_hei = int(round(len(self.structures) * 5 * self.parent.pixels_per_tile))
 
         self.content = tkinter.Frame(self.wind, width=self.wind_hei, height=self.wind_hei, borderwidth=2, relief="solid")
-        self.content.grid_propagate(0)
 
         self.coord_text = tkinter.Text(self.content, width=int(round(self.wind_wid / self.parent.pixels_per_tile)), height=1, fg="white", bg="dark blue", font='TkFixedFont')
         self.coord_text.insert(tkinter.END, x_y_to_coord(self.x_coord, self.y_coord))
@@ -2290,7 +2387,7 @@ class Examine(GUI):
         if(self.inter_cycle):
             return
 
-        self.structures = sort_by_priority(copy.deepcopy(self.parent.cur_world.get_tile_contents(self.x_coord, self.y_coord)))
+        self.structures = sort_by_priority(copy.deepcopy(self.parent.cur_world.get_all_tile_contents(self.x_coord, self.y_coord)))
 
         self.wind_hei = int(round(len(self.structures) * 5 * self.parent.pixels_per_tile))
         self.content.configure(height=self.wind_hei)
@@ -2399,12 +2496,13 @@ class Game_Window:
                         additional_args = []
                         for arg in args[4:len(args)]:
                             additional_args.append(arg)
-                        text_to_path(args[1])(self.cur_world, int(args[2]), int(args[3]), *additional_args)
+                        text_to_path(args[1])(self.cur_world.get_turf(int(args[2]), int(args[3])), *additional_args)
                     else:
-                        text_to_path(args[1])(self.cur_world, int(args[2]), int(args[3]))
+                        text_to_path(args[1])(self.cur_world.get_turf(int(args[2]), int(args[3])))
 
             elif(args[0] == "Show" and len(args) == 3):
-                self.cur_world.show_turf(self, int(args[1]), int(args[2]))
+                if(self.cur_world.coords_sanitized(int(args[1]), int(args[2]))):
+                    self.cur_world.show_turf(self, int(args[1]), int(args[2]))
 
             elif(args[0] == "Stop"):
                 freeze_time = True
@@ -2517,23 +2615,24 @@ class Game_Window:
             self.map_field_overlays[coord].append(self.map_field.create_text(int(round(x * self.pixels_per_tile) + self.pixels_per_tile), int(round(y * self.pixels_per_tile) + self.pixels_per_tile), text=icon["symbol"], font=icon["font"], fill=icon["color"]))
         self.icon_updating = False
 
+
 prepare_lists()
 
 The_Map = World(1)  # World initiation on z = 1.
 
-Tall_Grass(The_Map, 27, 24)
-Tall_Grass(The_Map, 29, 25)
-Tall_Grass(The_Map, 27, 24)
-Tall_Grass(The_Map, 29, 25)
-Tall_Grass(The_Map, 28, 26)
-Tall_Grass(The_Map, 28, 26)
-Forest(The_Map, 27, 24)
-Forest(The_Map, 25, 24)
-City(The_Map, 28, 25)
-Mountain(The_Map, 29, 26)
-Mountain(The_Map, 30, 26)
-Iron_Deposit(The_Map, 29, 26)
-Gold_Deposit(The_Map, 29, 26)
+Tall_Grass(The_Map.get_turf(27, 24))
+Tall_Grass(The_Map.get_turf(29, 25))
+Tall_Grass(The_Map.get_turf(27, 24))
+Tall_Grass(The_Map.get_turf(29, 25))
+Tall_Grass(The_Map.get_turf(28, 26))
+Tall_Grass(The_Map.get_turf(28, 26))
+Forest(The_Map.get_turf(27, 24))
+Forest(The_Map.get_turf(25, 24))
+City(The_Map.get_turf(28, 25))
+Mountain(The_Map.get_turf(29, 26))
+Mountain(The_Map.get_turf(30, 26))
+Iron_Deposit(The_Map.get_turf(29, 26))
+Gold_Deposit(The_Map.get_turf(29, 26))
 
 threading.Thread(target=master_controller).start()  # Controller start up.
 
