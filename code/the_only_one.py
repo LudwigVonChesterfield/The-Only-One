@@ -65,7 +65,7 @@ def number_to_day(num):
 
 
 def prob(prob):
-    if(random.randrange(1, 100) <= prob):
+    if(random.randrange(1, 101) <= prob):
         return True
     return False
 
@@ -73,6 +73,12 @@ def prob(prob):
 def is_instance_in_list(instance, list_):
     for inst in list_:
         if(isinstance(instance, inst)):
+            return True
+    return False
+
+def is_type_in_list(type, list_):
+    for inst in list_:
+        if(isinstance(inst, type)):
             return True
     return False
 
@@ -181,7 +187,7 @@ def master_controller():
 
                 if(prob(1)):
                     if(prob(1)):
-                        City(world.get_turf(random.randrange(0, world.max_x - 1), random.randrange(0, world.max_y - 1)))
+                        City(world.get_turf(random.randrange(0, world.max_x), random.randrange(0, world.max_y)))
                 world.processing = False
 
 
@@ -198,8 +204,9 @@ class World:
     allowed_turfs = {"Plains": 100, "Hills": 25, "Rocky": 10}
     struc_per_tile = 3
     struc_chance_per_tile = 75
-    lakes = 5
+    lakes = 9
     forests = 7
+    mountain_ranges = 7
     initiated = False
     processing = False
     process_atoms = []
@@ -286,7 +293,7 @@ class World:
         coords = []
         for x_ in range(x - x_range, x + x_range + 1):
             for y_ in range(y - y_range, y + y_range + 1):
-                if(not self.coords_sanitized(x_, y_)):
+                if(x_ < 0 or y_ < 0 or x_ >= self.max_x or y_ >= self.max_y):
                     continue
                 coords.append(x_y_to_coord(x_, y_))
         return coords
@@ -295,7 +302,7 @@ class World:
         contents = []
         for x_ in range(x - x_range, x + x_range + 1):
             for y_ in range(y - y_range, y + y_range + 1):
-                if(not self.coords_sanitized(x_, y_)):
+                if(x_ < 0 or y_ < 0 or x_ >= self.max_x or y_ >= self.max_y):
                     continue
                 turf = self.map_c[x_y_to_coord(x_, y_)]["Turf"]
                 contents += [turf] + turf.contents
@@ -306,13 +313,34 @@ class World:
             for x in range(self.max_x):
                 # self.map_c[x_y_to_coord(x, y)] = {"Turf": text_to_path(self.base_turf)({"x": x, "y": y, "world": self}), "Area": text_to_path(self.base_area)({"x": x, "y": y, "world": self})}
                 self.map_c[x_y_to_coord(x, y)] = {"Turf": text_to_path(self.base_turf)({"x": x, "y": y, "world": self})}
+
+        for y in range(self.max_y):
+            for x in range(self.max_x):
                 self.generate_tile(text_to_path(pick_weighted(self.allowed_turfs)), x, y)
 
         for L in range(self.lakes):
-            self.generate_cluster(random.randrange(0, self.max_x),
-                                  random.randrange(0, self.max_y),
-                                  2, 2, Water, 80, True
-                                  )
+            center_x = random.randrange(0, self.max_x)
+            center_y = random.randrange(0, self.max_y)
+            x_offset = random.randrange(2, 5)
+            y_offset = random.randrange(2, 5)
+            self.generate_round_cluster(center_x,
+                                        center_y,
+                                        x_offset, y_offset,
+                                        Water, 90, True
+                                        )
+
+            lake_depth = random.randrange(1, 3)
+            if(x_offset - lake_depth > 0 and y_offset - lake_depth > 0):
+                self.generate_round_cluster(center_x,
+                                            center_y,
+                                            x_offset - lake_depth, y_offset - lake_depth,
+                                            Deep_Water, 50, True
+                                            )
+
+        for M in range(self.mountain_ranges):
+            self.generate_line_offset(random.randrange(0, self.max_x), random.randrange(0, self.max_y),
+                                      random.randrange(2, 8), random.randrange(2, 8), Rocky, 30, True)
+
 
         for F in range(self.forests):
             self.generate_cluster(random.randrange(0, self.max_x),
@@ -332,7 +360,10 @@ class World:
 
         for N in range(self.struc_per_tile):
             if(prob(self.struc_chance_per_tile)):
-                new_turf.generate_contents()(new_turf)
+                content = pick_weighted(new_turf.allowed_contents)
+                if(content == "Nothing"):
+                    continue
+                text_to_path(content)(new_turf)
 
     def update_coord_icon(self, x, y):
         if(not self.initiated):
@@ -376,6 +407,60 @@ class World:
             x = coord_list["x"]
             y = coord_list["y"]
             self.update_coord_icon(x, y)
+
+    def generate_line_offset(self, x_start: int, y_start: int, max_x_range: int, max_y_range: int,
+                             tile_type: type, deviation: int, turf: bool
+                             ):
+        coord_end = coord_to_list(random.choice(self.get_region_coordinates(x_start, y_start, max_x_range, max_y_range)))
+        x_end = coord_end["x"]
+        y_end = coord_end["y"]
+
+        x_ = x_start
+        y_ = y_start
+
+        while(x_ != x_end or y_ != y_end):
+            if(self.coords_sanitized(x_, y_)):
+                if(turf):
+                    self.generate_tile(tile_type, x_, y_)
+                    contents = self.get_tile_contents(x_, y_)
+                    if(not is_type_in_list(Mountain, contents) and not is_type_in_list(Volcano, contents)):  # Bootleg to make mountain ranges.
+                        if(prob(50)):
+                            Mountain(self.get_turf(x_, y_))
+                        elif(prob(25)):
+                            Volcano(self.get_turf(x_, y_))
+                else:
+                    tile = self.get_turf(x_, y_)
+                    if(tile_type.name not in tile.allowed_contents):
+                        continue
+                    tile_type(self.get_turf(x_, y_))
+
+            x_off = 0
+            y_off = 0
+            x_vector = (((x_end - x_) > 0) - ((x_end - x_) < 0))
+            y_vector = (((y_end - y_) > 0) - ((y_end - y_) < 0))
+            if(prob(deviation)):
+                x_off = random.randrange(-1, 2) - x_vector
+                y_off = random.randrange(-1, 2) - y_vector
+            x_ = x_ + x_vector + x_off
+            y_ = y_ + y_vector + y_off
+
+    def generate_round_cluster(self, x: int, y: int,
+                               x_range: int, y_range: int,
+                               tile_type: type, chance: int, turf: bool
+                               ):
+        for coord in self.get_region_coordinates(x, y, x_range, y_range):
+            coord_list = coord_to_list(coord)
+            x_ = coord_list["x"]
+            y_ = coord_list["y"]
+            dist_to_cent = abs(x_ - x) + abs(y_ - y)
+            if(prob(chance - dist_to_cent * 2) and ((((x_ - x)**2 / x_range**2) + ((y_ - y)**2 / y_range**2)) <= 1)):
+                if(turf):
+                    self.generate_tile(tile_type, x_, y_)
+                else:
+                    tile = self.get_turf(x_, y_)
+                    if(tile_type.name not in tile.allowed_contents):
+                        continue
+                    tile_type(self.get_turf(x_, y_))
 
     def generate_cluster(self, x: int, y: int,
                          x_range: int, y_range: int,
@@ -468,6 +553,14 @@ class Atom:
     block_overlays = False
     priority = 0
 
+    # on_temp_gain stuff.
+    can_ignite = False              # Determines whether this thing can ignite.
+    ignition_point = -1             # Will spawn Fire if temperature is higher than this.
+    absorb_coefficient = 0          # Is multiplied by size and integrity to determine how much temperature has been absorbed.
+    temp_per_integrity_point = 100  # Absorbed temperature is divided by this to determine by how much to fire_act().
+
+    # Do note, that temp_per_integrity_point just called fire_act(), not crumble(), so things without fire_act() defined will not break from temperature.
+
     name = ""
     default_description = "I am an Atom."
 
@@ -476,7 +569,7 @@ class Atom:
 
     needs_processing = False
 
-    action_time = 0
+    action_time = 1  # Is also used in heat calculations.
 
     def __init__(self, loc):
         self.processing = False
@@ -495,6 +588,11 @@ class Atom:
         # Since "name" is more of a type, really.
         self.display_name = self.name
         self.description = self.default_description
+
+        if(not self.world):
+            print(x_y_to_coord(self.x, self.y))
+            print(self)
+            print(self.qdeling)
 
         self.last_action = self.world.time
         if(self.needs_processing):
@@ -608,8 +706,8 @@ class Atom:
             else:
                 self.move_atom_to(move_to_this)
                 return True
-            x_t = self.x + random.randrange(-1, 1)
-            y_t = self.y + random.randrange(-1, 1)
+            x_t = self.x + random.randrange(-1, 2)
+            y_t = self.y + random.randrange(-1, 2)
             move_to_this = self.world.get_turf(x_t, y_t)
             dummy_moves -= 1
         return False
@@ -625,6 +723,20 @@ class Atom:
             return True  # Fully crumbled.
         return False
 
+    def on_temp_gain(self, temperature, source):
+        """
+        While Atoms do not have a temperature
+        property, we can simulate effects of temperature
+        using this proc.
+        Return temperature absorbed.
+        """
+        absorbed = min([temperature, self.integrity * self.size * self.absorb_coefficient * source.action_time])
+        turf = self.world.get_turf(self.x, self.y)
+        if(self.can_ignite and temperature > self.ignition_point and not is_type_in_list(Fire, turf.contents)):
+            Fire(turf, temperature - absorbed)
+        self.fire_act((temperature - absorbed) // self.temp_per_integrity_point)
+        return absorbed
+
     def fire_act(self, severity):
         """
         What this atom should do upon being lit on fire.
@@ -639,6 +751,7 @@ class Atom:
         electricity source. If you return True, it means
         the atom conducts electricity.
         """
+        self.on_temp_gain(severity * 1034, source)  # Lightning has severity 10, and temperature of 10340(Fahrenheit(!), as all things here.)
         return False
 
     def get_task(self, city):
@@ -660,8 +773,6 @@ class Atom:
 
         self.update_icon()
 
-        self.loc = None
-        self.world = None
         del self
 
     def update_icon(self):
@@ -708,7 +819,7 @@ class Area(Atom):
 class Turf(Atom):
     overlayable = True
     priority = 1
-    allowed_contents = []
+    allowed_contents = {}
     size = 20  # Turfs are really big.
 
     def __init__(self, loc):
@@ -736,9 +847,6 @@ class Turf(Atom):
             del old_turf
 
         self.update_icon()
-
-    def generate_contents(self):
-        return text_to_path(pick_weighted(self.allowed_contents))
 
     def crumble(self, severity):
         return False
@@ -769,6 +877,8 @@ class Plains(Turf):
     default_description = "A plain sight, not much to see."
     allowed_contents = {"Nothing": 100, "Tall_Grass": 30, "Forest": 5}
 
+    absorb_coefficient = 1.0
+
 
 class Hills(Turf):
     icon_symbol = "-"
@@ -776,12 +886,69 @@ class Hills(Turf):
     default_description = "Hilly terrain. Up and down..."
     allowed_contents = {"Nothing": 100, "Forest": 1}
 
+    absorb_coefficient = 1.0
+
 
 class Rocky(Turf):
     icon_symbol = "="
     name = "Rocky"
     default_description = "Hills, but with a slight chance of rocks being around."
-    allowed_contents = {"Nothing": 100, "Mountain": 10, "Iron_Deposit": 3, "Gold_Deposit": 1, "Forest": 1}
+    allowed_contents = {"Nothing": 100, "Mountain": 10, "Iron_Deposit": 3, "Gold_Deposit": 1, "Forest": 1, "Volcano": 1}
+
+    absorb_coefficient = 0.5  # Stones are terrible at heat absorbtion.
+
+
+class Basalt(Turf):
+    icon_symbol = "="
+    icon_color = "gray16"
+    name = "Basalt"
+    default_description = "What's left of a great disaster a Volcano proposes."
+
+    absorb_coefficient = 0.0  # Allows Lava to easily flow over it.
+
+    def on_temp_gain(self, temperature, source):
+        # Allows Lava to easily flow over it, and us to avoid some unnecessary checks.
+        return 0
+
+
+class Lava(Turf):
+    icon_symbol = "~"
+    icon_color = "orange red"
+    name = "Lava"
+    default_description = "Lava to spread. Lava to burn."
+
+    needs_processing = True
+    action_time = 3
+
+    def __init__(self, loc, amount=3):
+        self.amount = int(amount)  # How many times will it be able to spread.
+        super().__init__(loc)
+        self.temperature = 2200
+
+    def process(self):
+        if(self.amount <= 0 or self.temperature <= 0):
+            Basalt(self)
+            return
+
+        pos_turfs = []
+        for x_ in range(self.x - 1, self.x + 2):
+            for y_ in range(self.y - 1, self.y + 2):
+                if(self.world.coords_sanitized(x_, y_)):
+                    pos_turfs.append(self.world.get_turf(x_, y_))
+
+        random.shuffle(pos_turfs)
+
+        for turf in pos_turfs:
+            for content in turf.contents:
+                absorbed = content.on_temp_gain(self.temperature, self)
+                self.temperature -= absorbed
+
+            Lava(turf, self.amount - 1)
+            self.amount -= 1
+
+    def on_temp_gain(self, temperature, source):
+        return 0  # Preventing Lava circle-heating itself.
+
 
 
 class Water(Turf):
@@ -789,16 +956,15 @@ class Water(Turf):
     icon_color = "blue"
     name = "Water"
     default_description = "Wet. Moist. Is a fluid."
-    obstruction = True
+    allowed_contents = {"Nothing": 100, "Fresh_Water": 30, "Reeds": 10}
 
     action_time = 1
 
     def __init__(self, loc):
-        super().__init__(loc)
         self.charge = 0
+        super().__init__(loc)
 
     def process(self):
-        self.icon_color = "yellow"
         self.update_icon()
         coords = self.world.get_region_coordinates(self.x, self.y, 1, 1)
         random.shuffle(coords)
@@ -817,34 +983,95 @@ class Water(Turf):
                 strucs = self.world.get_all_tile_contents(x_, y_)
 
             for struc in strucs:
+                if(self.charge <= 0):
+                    self.update_icon()
+                    self.processing = False
+                    self.world.process_atoms.remove(self)
+                    return
                 if(el_all_on_tile or isinstance(struc, Water)):
                     # Nothing passes the charge fully.le):
                     struc.electrocute_act(self.charge - 1, self)
+                    self.charge -= 1
 
-        self.charge -= 1
-        if(self.charge <= 0):
-            self.icon_color = "blue"
-            self.update_icon()
-            self.processing = False
-            self.world.process_atoms.remove(self)
-
+    def set_icon(self):
+        self.icon = {"symbol": self.icon_symbol, "color": "yellow" if self.charge else self.icon_color, "font": self.icon_font}
 
     def electrocute_act(self, severity, source):
-        to_shock = severity - self.charge
+        super().electrocute_act(severity, source)
+        to_shock = max([severity - self.charge, 0])
         if(to_shock > 0):
             self.charge += to_shock
             self.processing = True
             self.world.process_atoms.append(self)
         return True
 
+    def on_temp_gain(self, temperature, source):
+        absorbed = min([temperature, self.integrity * self.size * self.absorb_coefficient * source.action_time])
+        if(temperature - absorbed >= 212 and not is_type_in_list(Steam, self.contents)):
+            Steam(self, temperature - absorbed)
+        return temperature
+
+class Deep_Water(Water):
+    icon_color = "dark blue"
+    name = "Deep_Water"
+    default_description = "Just like water, but deeper."
+    allowed_contents = {}
+    obstruction = True
 
 # Objects.
 class Nothing(Object):
+    """
+    This class is redacted and unused.
+    Leaving it for the meme value.
+    It has been used before to generate
+    in contents when we needed to skip.
+    """
     icon_symbol = ""
     name = "Nothing"
 
     def __init__(self, loc):
         del self
+
+
+class Steam(Object):
+    icon_symbol = "*"
+    icon_color = "gray80"
+    icon_font = ("Courier", 8)
+    priority = 4
+    overlayable = True
+
+    name = "Steam"
+    default_description = "A steam that is hot to the touch."
+
+    action_time = 1
+    needs_processing = True
+
+    def __init__(self, loc, temperature=212):
+        super().__init__(loc)
+        self.temperature = temperature
+
+    def process(self):
+        if(self.temperature <= 212):  # Too cold.
+            self.qdel()
+            return
+
+        pos_turfs = []
+        for x_ in range(self.x - 1, self.x + 2):
+            for y_ in range(self.y - 1, self.y + 2):
+                if(self.world.coords_sanitized(x_, y_)):
+                    pos_turfs.append(self.world.get_turf(x_, y_))
+
+        random.shuffle(pos_turfs)
+
+        for turf in pos_turfs:
+            for content in turf.contents + [turf]:
+                absorbed = content.on_temp_gain(self.temperature, self)
+                self.temperature -= absorbed
+            if(not is_type_in_list(Steam, turf.contents)):
+                Steam(turf, self.temperature)
+
+    def on_temp_gain(self, temperature, source):
+        return temperature  # Fully absorbs to prevent Steam circle-spawning.
 
 
 class Fire(Object):
@@ -860,11 +1087,14 @@ class Fire(Object):
     action_time = 3
     needs_processing = True
 
-    def __init__(self, loc, integrity=3):
+    def __init__(self, loc, temperature=1100):
         super().__init__(loc)
-        self.integrity = int(integrity)
+        self.temperature = int(temperature)
 
     def process(self):
+        if(self.temperature <= 0):
+            self.qdel()
+            return
         coords = self.world.get_region_coordinates(self.x, self.y, 1, 1)
         random.shuffle(coords)
         for coord in coords:
@@ -874,31 +1104,28 @@ class Fire(Object):
             strucs = self.world.get_all_tile_contents(x_, y_)
             if(x_ == self.x and y_ == self.y):
                 for struc in strucs:
-                    if(struc.fire_act(1)):
+                    absorbed = struc.on_temp_gain(self.temperature, self)
+                    self.temperature -= absorbed
+                    if(struc.can_ignite and self.temperature - absorbed > struc.ignition_point):
                         self.integrity = min([self.integrity + 1, self.size])
                 continue
             for struc in strucs:
-                if(struc.fire_act(1)):
-                    self.spread_to(struc.x, struc.y)
-                    break
+                struc.on_temp_gain(self.temperature, self)
         self.update_icon()
         self.crumble(1)
 
-    def spread_to(self, x, y):
-        strucs = self.world.get_all_tile_contents(x, y)
-        for struc in strucs:
-            if(isinstance(struc, Water)):
-                return
-            if(isinstance(struc, Fire)):
-                return
-        Fire(self.world.get_turf(x, y), self.integrity)
+    def set_icon(self):
+        self.icon = {"symbol": self.icon_symbol, "color": self.icon_color, "font": ("Courier", self.integrity * 3)}
+
+    def on_temp_gain(self, temperature, source):
+        return 0  # Prevent Fires circle-ignting.
 
     def get_task(self, city):
         return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True, "dist_required": 0}
 
     def react_to_attack(self, attacker):
         if(prob(10)):
-            attacker.fire_act(1)
+            attacker.on_temp_gain(self.temperature, self)
             return True
         return False
 
@@ -911,12 +1138,14 @@ class Lightning(Object):
     size = 1
     priority = 100  # Pretty "light".
 
-    def __init__(self, loc, power=3):
+    def __init__(self, loc, power=10):
         super().__init__(loc)
         power = int(power)
         strucs = self.world.get_all_tile_contents(self.x, self.y)
+
         for struc in strucs:
             struc.electrocute_act(power, self)
+
         self.qdel()
         del self
 
@@ -992,13 +1221,68 @@ class Tall_Grass(Resource):
     default_resource_multiplier = 1.3
     def_amount = 100
 
+    can_ignite = True
+    ignition_point = 580
+    absorb_coefficient = 1.0
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
-    def electrocute_act(self, severity, source):
-        Fire(self.loc, severity)
-        return False  # It does not actually conduct electricity.
+
+class Reeds(Resource):
+    name = "Reeds"
+    default_description = "They grow on lakes and swamps. What are they?"
+    size = 3
+    priority = 3
+
+    icon_color = "brown"
+    icon_symbol = "|"
+
+    harvestable = True
+    allow_peasants = True
+    resource = "food"
+    job_to_harvest = "Farmer"
+    harv_priority = 1
+
+    def_amount = 90
+
+    can_ignite = True
+    ignition_point = 500
+    absorb_coefficient = 1.0
+
+    def fire_act(self, severity):
+        self.crumble(severity)
+        return True
+
+
+class Fresh_Water(Resource):
+    name = "Fresh_Water"
+    default_description = "Fresh water for them to drink."
+    size = 3
+    priority = 3
+
+    icon_font = ("Courier", 8)
+    icon_color = "royal blue"
+    icon_symbol = "~"
+
+    harvestable = True
+    allow_peasants = True
+    resource = "water"
+    job_to_harvest = "Peasant"
+    harv_priority = 1
+
+    def_amount = 200
+    default_resource_multiplier = 3.0  # Water is easy to harvest.
+
+    absorb_coefficient = 1.0
+    temp_per_integrity_point = 100
+
+
+    def fire_act(self, severity):
+        Steam(self.loc, severity * self.temp_per_integrity_point)
+        self.crumble(severity)
+        return False
 
 
 class Forest(Resource):
@@ -1015,13 +1299,13 @@ class Forest(Resource):
 
     def_amount = 300
 
+    can_ignite = True
+    ignition_point = 580
+    absorb_coefficient = 1.0
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
-
-    def electrocute_act(self, severity, source):
-        Fire(self.loc, severity)
-        return False  # It does not actually conduct electricity.
 
 
 class Mountain(Resource):
@@ -1040,6 +1324,55 @@ class Mountain(Resource):
     harv_priority = 5
 
     def_amount = 500
+
+    absorb_coefficient = 0.5  # Stones are bad at absorbing heat.
+
+    def on_temp_gain(self, temperature, source):  # A passive Volcano can get reheated...
+        if(temperature >= 2200 and prob(10)):
+            Volcano(self.world.get_turf(self.x, self.y))
+            self.qdel()
+            del self
+            return temperature
+        return self.integrity * self.size * self.absorb_coefficient * source.action_time
+
+
+class Volcano(Mountain):
+    icon_color = "orange red"
+    name = "Volcano"
+    default_description = "A geyser to spit lava."
+
+    allow_peasants = False
+    resource = "stone"
+    job_to_harvest = "Miner"
+    harv_priority = 5
+
+    def_amount = 1000
+
+    action_time = 720
+    needs_processing = True
+
+    absorb_coefficient = 0.5  # Inherits from Mountain, but want to specify that this is a feature.
+
+    def __init__(self, loc):
+        super().__init__(loc)
+        self.activity = random.randrange(1, 21)  # How active is the Volcano on 1 to 20 scale.
+
+        for x_ in range(self.x - 1, self.x + 2):
+            for y_ in range(self.y - 1, self.y + 2):
+                if(prob(self.activity * 10) and self.world.coords_sanitized(x_, y_)):
+                    Basalt(self.world.get_turf(x_, y_))
+
+    def process(self):
+        if(self.activity <= 0):
+            Mountain(self.world.get_turf(self.x, self.y))
+            self.qdel()
+            del self
+            return
+        if(prob(self.activity)):
+            dis_scale = random.randrange(1, 11)  # How disasterous the eruption on 1 to 10 scale.
+            Lava(self.world.get_turf(self.x, self.y), dis_scale)
+            self.activity -= dis_scale
+        self.activity += 1
 
 
 class Iron_Deposit(Resource):
@@ -1086,6 +1419,7 @@ class Tool(Object):
     overlayable = True
     priority = 2
 
+    size = 1
     name = ""
     job = ""
     make_priority = 0
@@ -1097,21 +1431,31 @@ class Tool(Object):
     res_make_of = None  # Chisel makes out of stone, etc.
     res_quality = 1.0  # Chisel should have higher quality, since it makes out of stone.
 
+    absorb_coefficient = 1.0  # I mean, they do break from it.
+
     def __init__(self, loc, materials={"wood" : 5}, quality_modifier=1):
         self.set_icon()
         self.qdeling = False
         self.loc = None
+        self.world = None
         self.move_atom_to(loc)
         self.display_name = self.name
         self.materials = materials
+        self.integrity = 1
         self.quality = random.uniform(1.5, 2.5) * quality_modifier
 
     def crumble(self, severity):
-        return False  # TODO: Tool breaking instead of structure breaking.
+        self.qdel()
+        return True  # TODO: Tool breaking instead of structure breaking.
+
+    def fire_act(self, severity):
+        self.crumble(severity)
+        return False  # We can't assume that all tools are made of wood.
 
     def move_atom_to(self, loc):
         if(self.loc and not self.qdeling):
             self.loc.contents.remove(self)
+        self.world = loc.world
         self.loc = loc
         self.x = loc.x
         self.y = loc.y
@@ -1224,6 +1568,10 @@ class City(Object):
     needs_processing = True
     action_time = 24  # Once a day they get new tasks.
 
+    can_ignite = True
+    ignition_point = 1100
+    absorb_coefficient = 1.0
+
     def __init__(self, loc, faction=None):
         global log
 
@@ -1234,7 +1582,7 @@ class City(Object):
             self.faction = Faction(self)
 
         super().__init__(loc)
-        self.display_name = self.name + " " + str(random.randrange(1, 999))
+        self.display_name = self.name + " " + str(random.randrange(1, 1000))
         self.max_population = 10
 
         self.job_requests = {"Toddler": 0,
@@ -1268,11 +1616,12 @@ class City(Object):
 
         self.tasks = []
 
-        self.resources = {"food" : 100,
-                          "wood" : 0,
-                          "stone" : 0,
-                          "iron" : 0,
-                          "gold" : 0}
+        self.resources = {"food": 100,
+                          "water": 100,
+                          "wood": 0,
+                          "stone": 0,
+                          "iron": 0,
+                          "gold": 0}
 
         for N in range(self.starting_citizens):
             citizen = Citizen(self, "Peasant", self)
@@ -1525,10 +1874,6 @@ class City(Object):
         self.crumble(severity)
         return True
 
-    def electrocute_act(self, severity, source):
-        Fire(self.loc)
-        return False  # It does not actually conduct electricity.
-
 
 class Structure(Resource):
     icon_color = "grey"
@@ -1564,6 +1909,10 @@ class Construction(Structure):
     name = "Construction"
     default_description = "When Construction will grow up, it will become a big Structure!."
 
+    can_ignite = True
+    ignition_point = 1100
+    absorb_coefficient = 1.0
+
     def __init__(self, loc, to_construct, struc_type, faction=None):
         super().__init__(loc, faction)
         self.to_construct = to_construct
@@ -1583,6 +1932,10 @@ class Construction(Structure):
                 return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True, "dist_required": 0}
         return {"priority" : 1, "jobs" : ["Builder"], "task" : "construct", "target" : self, "allowed_peasants" : False, "dist_required": 0}
 
+    def fire_act(self, severity):
+        self.crumble(severity)
+        return True
+
 
 class House(Structure):
     icon_symbol = "H"
@@ -1590,13 +1943,13 @@ class House(Structure):
     default_description = "A place for Citizens to call home."
     work_required = 20
 
+    can_ignite = True
+    ignition_point = 1100
+    absorb_coefficient = 1.0
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
-
-    def electrocute_act(self, severity, source):
-        Fire(self.loc)
-        return False  # It does not actually conduct electricity.
 
 
 class Farm(Structure):
@@ -1614,13 +1967,13 @@ class Farm(Structure):
     default_resource_multiplier = 1.5
     def_amount = 500
 
+    can_ignite = True
+    ignition_point = 1100
+    absorb_coefficient = 1.0
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
-
-    def electrocute_act(self, severity, source):
-        Fire(self.loc)
-        return False  # It does not actually conduct electricity.
 
 
 class Mine(Structure):
@@ -1654,31 +2007,35 @@ class Citizen(Mob):
     needs_processing = True
     action_time = 4
 
+    absorb_coefficient = 1.0
+    temp_per_integrity_point = 10  # Citizens burn easily.
+
     def __init__(self, loc, job, city=None):
         self.city = None
         if(city):
             self.join_city(city)
 
         super().__init__(loc)
-        self.resources = {"food" : 30,  # We give them some starting food.
-                          "wood" : 0,
-                          "stone" : 0,
-                          "iron" : 0,
-                          "gold" : 0}
+        self.resources = {"food": 30,  # We give them some starting food.
+                          "water": 30,
+                          "wood": 0,
+                          "stone": 0,
+                          "iron": 0,
+                          "gold": 0}
 
         self.tasks = []
         self.personal_tasks = []
         self.target_task = None  # Task given by city.
 
-        self.id = str(random.randrange(1, 999))
+        self.id = str(random.randrange(1, 1000))
         self.actions_to_perform = self.max_actions_to_perform
         self.work_per_action_time = self.max_work_per_action_time
 
-        self.max_health = random.randrange(2, 4)
+        self.max_health = random.randrange(2, 5)
         self.health = self.max_health
         self.age = 8760  # At least one year.
 
-        self.max_saturation = random.randrange(50, 100)
+        self.max_saturation = random.randrange(50, 101)
         self.saturation = self.max_saturation
         self.hunger_rate = random.uniform(0.7, 1.3)
         self.malnutrition = 0
@@ -2010,7 +2367,7 @@ class Citizen(Mob):
     def react_to_attack(self, attacker):
         """
         This is basically the destroy() method.
-        But it is used in coubnter attacking,
+        But it is used in counter attacking,
         we define it seperately to prevent recursions.
         """
         if(self.actions_to_perform <= -self.max_actions_to_perform):
@@ -2122,9 +2479,8 @@ class Citizen(Mob):
         return 2
 
     def crumble(self, severity):
-        self.health = self.health - severity
+        self.health -= severity
         if(self.health <= 0):
-            
             self.qdel()
             del self
             return True # Fully crumbled.
@@ -2133,10 +2489,6 @@ class Citizen(Mob):
     def fire_act(self, severity):
         self.crumble(severity)
         return False  # I mean, you can't spread fire by just one Citizen.
-
-    def electrocute_act(self, severity):
-        self.crumble(seveirty)
-        return False  # Do not conduct it further.
 
     def get_tool_quality(self, job_to_check="Toddler"):  # Toddler means any tool will do.
         if(self.tool and (self.tool.job == job_to_check or job_to_check == "Toddler")):
@@ -2219,7 +2571,7 @@ class Toddler(Citizen):
         self.max_health = 1
         self.health = self.max_health
 
-        self.max_saturation = random.randrange(10, 20)
+        self.max_saturation = random.randrange(10, 21)
         self.saturation = self.max_saturation
         self.hunger_rate = random.uniform(0.35, 0.65)
 
@@ -2604,4 +2956,4 @@ The_Map = World(1)  # World initiation on z = 1.
 
 threading.Thread(target=master_controller).start()  # Controller start up.
 
-GUI = Game_Window(The_Map)  # Opening the gui window.
+Game_Window(The_Map)  # Opening the gui window.
