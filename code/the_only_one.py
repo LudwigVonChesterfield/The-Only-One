@@ -201,12 +201,13 @@ class World:
     z = -1
     base_turf = "Plains"  # Default Turf.
     base_area = "Area"
-    allowed_turfs = {"Plains": 100, "Hills": 25, "Rocky": 10}
+    allowed_turfs = {"Plains": 100, "Hills": 25, "Rocky": 10, "Swampy": 1}
     struc_per_tile = 3
     struc_chance_per_tile = 75
     lakes = 9
     forests = 7
     mountain_ranges = 7
+    swamps = 3
     initiated = False
     processing = False
     process_atoms = []
@@ -318,6 +319,12 @@ class World:
             for x in range(self.max_x):
                 self.generate_tile(text_to_path(pick_weighted(self.allowed_turfs)), x, y)
 
+        for S in range(self.swamps):
+            self.generate_cluster(random.randrange(0, self.max_x),
+                                  random.randrange(0, self.max_y),
+                                  4, 4, Swampy, 75, True
+                                  )
+
         for L in range(self.lakes):
             center_x = random.randrange(0, self.max_x)
             center_y = random.randrange(0, self.max_y)
@@ -423,9 +430,11 @@ class World:
                 if(turf):
                     self.generate_tile(tile_type, x_, y_)
                     contents = self.get_tile_contents(x_, y_)
-                    if(not is_type_in_list(Mountain, contents) and not is_type_in_list(Volcano, contents)):  # Bootleg to make mountain ranges.
+                    if(not is_type_in_list(Mountain, contents) and not is_type_in_list(Volcano, contents) and not is_type_in_list(Dormant_Volcano, contents)):  # Bootleg to make mountain ranges.
                         if(prob(50)):
                             Mountain(self.get_turf(x_, y_))
+                        elif(prob(25)):
+                            Dormant_Volcano(self.get_turf(x_, y_))
                         elif(prob(25)):
                             Volcano(self.get_turf(x_, y_))
                 else:
@@ -501,9 +510,6 @@ class Faction:
 
         factions.append(self)  # So we don't set relationships to ourselves.
 
-    def add_to_faction(self, member):
-        self.members.append(member)
-
     def get_relationship(self, faction):
         if(not faction):
             return "Hostile"  # Who doesn't belong to our friends is a foe!
@@ -565,7 +571,7 @@ class Atom:
     default_description = "I am an Atom."
 
     obstruction = False
-    size = 0
+    def_size = 0
 
     needs_processing = False
 
@@ -581,19 +587,19 @@ class Atom:
         self.world = None
 
         self.contents = []
-        self.integrity = self.size
+        self.size = self.def_size
+        self.integrity = self.def_size
         self.set_icon()
+
+        if(isinstance(loc, Atom) and loc.qdeling):
+            del self
+            return
+
         self.move_atom_to(loc)
 
         # Since "name" is more of a type, really.
         self.display_name = self.name
         self.description = self.default_description
-
-        if(not self.world):
-            print(x_y_to_coord(self.x, self.y))
-            print(self)
-            print(self.qdeling)
-
         self.last_action = self.world.time
         if(self.needs_processing):
             self.processing = True
@@ -628,9 +634,8 @@ class Atom:
         return True
 
     def Examinated(self, GUI):
-        global log
-
-        log += self.getExamineText() + "\n"
+        if(GUI.icon_update):
+            GUI.log_to_GUI(self.getExamineText() + "\n")
 
     def getExamineText(self):
         return str(self.icon_symbol) + " [" + self.display_name + "] " + self.default_description
@@ -658,9 +663,6 @@ class Atom:
         return abs(to_dist.x - self.x) + abs(to_dist.y - self.y)
 
     def move_atom_to(self, loc):
-        if(loc.qdeling):
-            return
-
         if(self.loc):
             self.loc.contents.remove(self)
             if(isinstance(self.loc, Turf)):
@@ -700,15 +702,15 @@ class Atom:
         while(dummy_moves):
             for struc in move_to_this.contents + [move_to_this]:
                 if(struc.obstruction):
-                    if(not self.world):
-                        return False
                     break
             else:
                 self.move_atom_to(move_to_this)
                 return True
-            x_t = self.x + random.randrange(-1, 2)
-            y_t = self.y + random.randrange(-1, 2)
-            move_to_this = self.world.get_turf(x_t, y_t)
+            move_to_this = None
+            while(not move_to_this):
+                x_t = self.x + random.randrange(-1, 2)
+                y_t = self.y + random.randrange(-1, 2)
+                move_to_this = self.world.get_turf(x_t, y_t)
             dummy_moves -= 1
         return False
 
@@ -820,7 +822,7 @@ class Turf(Atom):
     overlayable = True
     priority = 1
     allowed_contents = {}
-    size = 20  # Turfs are really big.
+    def_size = 20  # Turfs are really big.
 
     def __init__(self, loc):
         self.current_load = 0
@@ -859,13 +861,13 @@ class Turf(Atom):
         super().Destroy()
         del self
 
-class Moveable(Atom):
+class Movable(Atom):
     obstruction = False
 
-class Object(Moveable):
+class Object(Movable):
     priority = 11
 
-class Mob(Moveable):
+class Mob(Movable):
     priority = 21
 
 #Areas.
@@ -893,9 +895,33 @@ class Rocky(Turf):
     icon_symbol = "="
     name = "Rocky"
     default_description = "Hills, but with a slight chance of rocks being around."
-    allowed_contents = {"Nothing": 100, "Mountain": 10, "Iron_Deposit": 3, "Gold_Deposit": 1, "Forest": 1, "Volcano": 1}
+    allowed_contents = {"Nothing": 100, "Mountain": 10, "Dormant_Volcano": 5, "Iron_Deposit": 3, "Gold_Deposit": 1, "Forest": 1, "Volcano": 1}
 
     absorb_coefficient = 0.5  # Stones are terrible at heat absorbtion.
+
+
+class Swampy(Turf):
+    icon_symbol = "_"
+    icon_color = "DarkOliveGreen3"
+    name  = "Swampy"
+    default_description = "Swamp land, covered in swamp, and is swamp all around. What are they doing here?"
+    allowed_contents = {"Nothing": 100, "Reeds": 30, "Eathernware": 10}
+
+    temp_per_integrity_point = 200
+
+    def crumble(self, severity):
+        self.integrity -= severity
+        if(self.integrity <= 0):
+            Plains(self)
+            return True  # Fully crumbled.
+        return False
+
+    def on_temp_gain(self, temperature, source):
+        absorbed = min([temperature, self.integrity * self.size * self.absorb_coefficient * source.action_time])
+        if(temperature - absorbed >= 212 and not is_type_in_list(Steam, self.contents)):
+            Steam(self, temperature - absorbed)
+            self.crumble((temperature - absorbed) // self.temp_per_integrity_point)
+        return temperature
 
 
 class Basalt(Turf):
@@ -904,11 +930,11 @@ class Basalt(Turf):
     name = "Basalt"
     default_description = "What's left of a great disaster a Volcano proposes."
 
-    absorb_coefficient = 0.0  # Allows Lava to easily flow over it.
+    absorb_coefficient = 0.1  # Allows Lava to easily flow over it.
 
     def on_temp_gain(self, temperature, source):
         # Allows Lava to easily flow over it, and us to avoid some unnecessary checks.
-        return 0
+        return self.absorb_coefficient * temperature
 
 
 class Lava(Turf):
@@ -959,6 +985,7 @@ class Water(Turf):
     allowed_contents = {"Nothing": 100, "Fresh_Water": 30, "Reeds": 10}
 
     action_time = 1
+    temp_per_integrity_point = 300  # Water is slightly more resilitent to heat, and has it's own mechanic.
 
     def __init__(self, loc):
         self.charge = 0
@@ -989,8 +1016,8 @@ class Water(Turf):
                     self.world.process_atoms.remove(self)
                     return
                 if(el_all_on_tile or isinstance(struc, Water)):
-                    # Nothing passes the charge fully.le):
-                    struc.electrocute_act(self.charge - 1, self)
+                    # Nothing passes the charge fully.
+                    struc.electrocute_act(1, self)
                     self.charge -= 1
 
     def set_icon(self):
@@ -1005,10 +1032,18 @@ class Water(Turf):
             self.world.process_atoms.append(self)
         return True
 
+    def crumble(self, severity):
+        self.integrity -= severity
+        if(self.integrity <= 0):
+            Plains(self)
+            return True  # Fully crumbled.
+        return False
+
     def on_temp_gain(self, temperature, source):
         absorbed = min([temperature, self.integrity * self.size * self.absorb_coefficient * source.action_time])
         if(temperature - absorbed >= 212 and not is_type_in_list(Steam, self.contents)):
             Steam(self, temperature - absorbed)
+            self.crumble((temperature - absorbed) // self.temp_per_integrity_point)
         return temperature
 
 class Deep_Water(Water):
@@ -1017,6 +1052,15 @@ class Deep_Water(Water):
     default_description = "Just like water, but deeper."
     allowed_contents = {}
     obstruction = True
+
+    temp_per_integrity_point = 400  # Is even more so resilient to heat.
+
+    def crumble(self, severity):
+        self.integrity -= severity
+        if(self.integrity <= 0):
+            Water(self)
+            return True  # Fully crumbled.
+        return False
 
 # Objects.
 class Nothing(Object):
@@ -1032,6 +1076,85 @@ class Nothing(Object):
     def __init__(self, loc):
         del self
 
+"""
+class Tornado(Object):
+    icon_symbol = "@"
+    icon_color = "thistle3"
+    icon_font = ("Courier", 8)
+    priority = 100  # Thing's quite noticeable.
+    overlayable = True
+    def_size = 10  # Acts as it's max size.
+
+    name = "Tornado"
+    default_description = "A tornado to wreck their day."
+
+    action_time = 3
+    needs_processing = True
+
+    absorb_coefficient = 0.0  # It's a bunch of winds, duh.
+
+    def __init__(self, loc, wind_speed=140):
+        self.wind_speed = int(wind_speed)  # F0 = 18 meters / second = size 2.
+        super().__init__(loc)
+        self.target = None  # We will be moving towards it.
+
+    def set_icon(self):
+        self.icon = {"symbol": self.icon_symbol, "color": self.icon_color, "font": ("Courier", 6 + self.size)}
+
+    def process(self):
+        self.size = min([self.def_size, int(self.wind_speed // 9)])
+        if(self.wind_speed < 0):
+            for content in self.contents:
+                content.move_atom_to(self.loc)
+            self.qdel()
+            del self
+            return
+
+        # Moving code.
+        if(not self.target):
+            pos_turfs = []
+            for x_ in range(self.x - 1, self.x + 2):
+                for y_ in range(self.y - 1, self.y + 2):
+                    if(self.world.coords_sanitized(x_, y_)):
+                        pos_turfs.append(self.world.get_turf(x_, y_))
+            self.target = random.choice(pos_turfs)
+
+        self.move_towards_to(self.target, 3)
+
+        if(self.loc == self.target):
+            self.target = None
+
+        # Picking up and destroying stuff code.
+        pos_turfs = []
+        for x_ in range(self.x - 1, self.x + 2):
+            for y_ in range(self.y - 1, self.y + 2):
+                if(self.world.coords_sanitized(x_, y_)):
+                    pos_turfs.append(self.world.get_turf(x_, y_))
+
+        for content in self.contents:
+            delta = self.size - content.size
+            if(delta < -1):
+                content.move_atom_to(self.loc)
+            elif(delta < 0):
+                content.move_atom_to(random.choice(pos_turfs))
+
+        for turf in pos_turfs:
+            for content in turf.contents + [turf]:  # I mean, water can crumble too.
+                absorbed = content.on_temp_gain(self.action_time, self)
+                print(absorbed)
+                self.wind_speed += absorbed
+                if(self.size >= content.size and isinstance(content, Movable) and not isinstance(content, Tornado)):
+                    content.move_atom_to(self)
+
+        self.wind_speed -= self.action_time * self.size
+
+        if(self.wind_speed > 140):
+            Tornado(self.loc, self.wind_speed - 140)
+
+    def on_temp_gain(self, temperature, source):
+        self.wind_speed += (temperature // self.temp_per_integrity_point) * source.action_time
+        return 0
+"""
 
 class Steam(Object):
     icon_symbol = "*"
@@ -1048,10 +1171,10 @@ class Steam(Object):
 
     def __init__(self, loc, temperature=212):
         super().__init__(loc)
-        self.temperature = temperature
+        self.temperature = int(temperature)
 
     def process(self):
-        if(self.temperature <= 212):  # Too cold.
+        if(self.temperature < 212):  # Too cold.
             self.qdel()
             return
 
@@ -1067,7 +1190,7 @@ class Steam(Object):
             for content in turf.contents + [turf]:
                 absorbed = content.on_temp_gain(self.temperature, self)
                 self.temperature -= absorbed
-            if(not is_type_in_list(Steam, turf.contents)):
+            if(not is_type_in_list(Steam, turf.contents) and self.temperature >= 212):
                 Steam(turf, self.temperature)
 
     def on_temp_gain(self, temperature, source):
@@ -1082,7 +1205,7 @@ class Fire(Object):
 
     name = "Fire"
     default_description = "Full of passion and desire, it is very much a fire."
-    size = 3
+    def_size = 3
 
     action_time = 3
     needs_processing = True
@@ -1121,7 +1244,7 @@ class Fire(Object):
         return 0  # Prevent Fires circle-ignting.
 
     def get_task(self, city):
-        return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True, "dist_required": 0}
+        return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True, "dist_required": 0, "require_action": True}
 
     def react_to_attack(self, attacker):
         if(prob(10)):
@@ -1135,7 +1258,7 @@ class Lightning(Object):
     icon_color = "yellow"
     name = "Lightning"
     default_description = "It is before the Thunder."
-    size = 1
+    def_size = 1
     priority = 100  # Pretty "light".
 
     def __init__(self, loc, power=10):
@@ -1164,14 +1287,11 @@ class Resource(Object):
         super().__init__(loc)
         self.been_used = False
         self.resource_multiplier = random.uniform(0.7, 1.3) * self.default_resource_multiplier
-        self.resourcefulness = self.get_max_resourcefulness()
-
-    def get_max_resourcefulness(self):
-        return int(round(self.def_amount * self.resource_multiplier * self.integrity))
+        self.resourcefulness = int(round(self.def_amount * self.resource_multiplier * self.integrity))
 
     def get_task(self, city):
         if(self.harvestable):
-            return {"priority" : self.harv_priority, "jobs" : [self.job_to_harvest], "task" : "harvest", "target" : self, "allowed_peasants" : self.allow_peasants, "dist_required": 0}
+            return {"priority" : self.harv_priority, "jobs" : [self.job_to_harvest], "task" : "harvest", "target" : self, "allowed_peasants" : self.allow_peasants, "dist_required": 0, "require_action": True}
 
     def harvest(self, harvester, amount):
         """Returns how much resource has actually been harvested."""
@@ -1195,7 +1315,7 @@ class Resource(Object):
 
     def crumble(self, severity):
         if(not super().crumble(severity)):
-            self.resourcefulness = min([self.resourcefulness, self.get_max_resourcefulness()])
+            self.resourcefulness = min([self.resourcefulness, int(round(self.def_amount * self.resource_multiplier * self.integrity))])
             if(self.resourcefulness <= 0):
                 self.qdel()
                 del self
@@ -1207,7 +1327,7 @@ class Resource(Object):
 class Tall_Grass(Resource):
     name = "Tall_Grass"
     default_description = "A grass to eat when hungry."
-    size = 3
+    def_size = 3
     priority = 3
 
     icon_symbol = "|"
@@ -1233,7 +1353,7 @@ class Tall_Grass(Resource):
 class Reeds(Resource):
     name = "Reeds"
     default_description = "They grow on lakes and swamps. What are they?"
-    size = 3
+    def_size = 3
     priority = 3
 
     icon_color = "brown"
@@ -1245,6 +1365,7 @@ class Reeds(Resource):
     job_to_harvest = "Farmer"
     harv_priority = 1
 
+    default_resource_multiplier = 1.1
     def_amount = 90
 
     can_ignite = True
@@ -1259,7 +1380,7 @@ class Reeds(Resource):
 class Fresh_Water(Resource):
     name = "Fresh_Water"
     default_description = "Fresh water for them to drink."
-    size = 3
+    def_size = 3
     priority = 3
 
     icon_font = ("Courier", 8)
@@ -1289,13 +1410,13 @@ class Forest(Resource):
     icon_symbol = "^"
     name = "Forest"
     default_description = "A place for trees to go, for a Lumberjack to cut."
-    size = 10
+    def_size = 10
 
     harvestable = True
     allow_peasants = True
     resource = "wood"
     job_to_harvest = "Lumberjack"
-    harv_priority = 3
+    harv_priority = 2
 
     def_amount = 300
 
@@ -1308,6 +1429,25 @@ class Forest(Resource):
         return True
 
 
+class Eathernware(Resource):
+    icon_symbol = "o"
+    icon_color = "plum2"
+    name = "Eathernware"
+    default_description = "A type of clay that is not of best quality."
+    def_size = 3
+    priority = 2
+
+    harvestable = True
+    allow_peasants = True
+    resource = "clay"
+    job_to_harvest = "Miner"
+    harv_priority = 2
+
+    def_amount = 100
+
+    absorb_coefficient = 0.1  # Clay is very bad in absorbing heat. But it probably should get cooked or something.
+
+
 class Mountain(Resource):
     icon_symbol = "A"
     icon_color = "gray26"
@@ -1315,7 +1455,7 @@ class Mountain(Resource):
     name = "Mountain"
     default_description = "A rock of rocks, that is rockier than most."
     obstruction = True
-    size = 15
+    def_size = 15
 
     harvestable = True
     allow_peasants = True
@@ -1327,9 +1467,18 @@ class Mountain(Resource):
 
     absorb_coefficient = 0.5  # Stones are bad at absorbing heat.
 
+
+class Dormant_Volcano(Mountain):
+    name = "Dormant_Volcano"
+    default_description = "They sleep, awaiting heat of battle to turn over to them."
+
+    def_amount = 1000
+
     def on_temp_gain(self, temperature, source):  # A passive Volcano can get reheated...
         if(temperature >= 2200 and prob(10)):
-            Volcano(self.world.get_turf(self.x, self.y))
+            vol = Volcano(self.world.get_turf(self.x, self.y))
+            vol.integrity = self.integrity
+            vol.resourcefulness = self.resourcefulness
             self.qdel()
             del self
             return temperature
@@ -1341,21 +1490,16 @@ class Volcano(Mountain):
     name = "Volcano"
     default_description = "A geyser to spit lava."
 
-    allow_peasants = False
-    resource = "stone"
-    job_to_harvest = "Miner"
-    harv_priority = 5
-
     def_amount = 1000
 
-    action_time = 720
+    action_time = 1440  # Checks each two months.
     needs_processing = True
 
     absorb_coefficient = 0.5  # Inherits from Mountain, but want to specify that this is a feature.
 
     def __init__(self, loc):
         super().__init__(loc)
-        self.activity = random.randrange(1, 21)  # How active is the Volcano on 1 to 20 scale.
+        self.activity = random.randrange(1, 21)  # How active is the Volcano on 1 to 16 scale.
 
         for x_ in range(self.x - 1, self.x + 2):
             for y_ in range(self.y - 1, self.y + 2):
@@ -1364,7 +1508,9 @@ class Volcano(Mountain):
 
     def process(self):
         if(self.activity <= 0):
-            Mountain(self.world.get_turf(self.x, self.y))
+            dor_vol = Dormant_Volcano(self.world.get_turf(self.x, self.y))
+            dor_vol.integrity = self.integrity
+            dor_vol.resourcefulness = self.resourcefulness
             self.qdel()
             del self
             return
@@ -1381,7 +1527,7 @@ class Iron_Deposit(Resource):
     name = "Iron_Deposit"
     default_description = "It has iron in it!"
     obstruction = True
-    size = 3
+    def_size = 3
     priority = 2
 
     harvestable = True
@@ -1392,6 +1538,8 @@ class Iron_Deposit(Resource):
 
     def_amount = 30
 
+    absorb_coefficient = 2.0  # Iron is super conductive.
+
 
 class Gold_Deposit(Resource):
     icon_symbol = "g"
@@ -1399,7 +1547,7 @@ class Gold_Deposit(Resource):
     name = "Gold_Deposit"
     default_description = "It has gold in it!"
     obstruction = True
-    size = 3
+    def_size = 3
     priority = 2
 
     harvestable = True
@@ -1410,6 +1558,8 @@ class Gold_Deposit(Resource):
 
     def_amount = 30
 
+    absorb_coefficient = 1.0  # Gold should melt probably.
+
 
 class Tool(Object):
     icon_color = "grey"
@@ -1419,7 +1569,7 @@ class Tool(Object):
     overlayable = True
     priority = 2
 
-    size = 1
+    def_size = 1
     name = ""
     job = ""
     make_priority = 0
@@ -1441,6 +1591,7 @@ class Tool(Object):
         self.move_atom_to(loc)
         self.display_name = self.name
         self.materials = materials
+        self.size = self.def_size
         self.integrity = 1
         self.quality = random.uniform(1.5, 2.5) * quality_modifier
 
@@ -1466,7 +1617,7 @@ class Tool(Object):
         del self
 
     def get_task(self, city):
-        return {"priority" : 1, "jobs" : ["Peasant"], "task" : "equip", "item" : self, "target": city, "allowed_peasants" : True, "dist_required": 0}
+        return {"priority" : 1, "jobs" : ["Peasant"], "task" : "equip", "item" : self, "target": city, "allowed_peasants" : True, "dist_required": 0, "require_action": False}
 
 
 class Hoe(Tool):
@@ -1483,7 +1634,7 @@ class Hammer(Tool):
     icon_symbol = "h"
     name = "Hammer"
     job = "Builder"
-    make_priority = 2
+    make_priority = 3
     jobs_to_make = ["Carpenter", "Stonecutter"]
     allowed_peasants = False
     res_to_make = {"restype_": 5}
@@ -1529,6 +1680,19 @@ class Pickaxe(Tool):
     res_to_make = {"restype_": 5}
 
 
+class Spatula(Tool):
+    icon_symbol = "s"
+    name = "Spatula"
+    job = "Potter"
+    make_priority = 3
+    jobs_to_make = ["Peasant"]
+    allowed_peasants = True
+    res_to_make = {"clay": 5}
+
+    res_make_of = "clay"
+    res_quality = 1.3
+
+
 class Chisel(Tool):
     icon_symbol = "c"
     name = "Chisel"
@@ -1546,7 +1710,7 @@ class Saw(Tool):
     icon_symbol = "s"
     name = "Saw"
     job = "Carpenter"
-    make_priority = 2
+    make_priority = 3
     jobs_to_make = ["Peasant"]
     allowed_peasants = True
     res_to_make = {"wood": 5}
@@ -1561,7 +1725,7 @@ class City(Object):
     name = "City"
     default_description = ""  # Uses custom code.
     priority = 30  # Should actually be above mob layer.
-    size = 5
+    def_size = 5
 
     starting_citizens = 5
 
@@ -1577,7 +1741,7 @@ class City(Object):
 
         self.faction = faction
         if(faction):
-            faction.add_to_faction(self)
+            faction.members.append(self)
         else:
             self.faction = Faction(self)
 
@@ -1591,6 +1755,7 @@ class City(Object):
                              "Builder": 0,
                              "Carpenter": 0,
                              "Lumberjack": 0,
+                             "Potter": 0,
                              "Stonecutter": 0,
                              "Miner": 0,
                              "Blacksmith": 0,
@@ -1619,6 +1784,7 @@ class City(Object):
         self.resources = {"food": 100,
                           "water": 100,
                           "wood": 0,
+                          "clay": 0,
                           "stone": 0,
                           "iron": 0,
                           "gold": 0}
@@ -1626,7 +1792,9 @@ class City(Object):
         for N in range(self.starting_citizens):
             citizen = Citizen(self, "Peasant", self)
 
-        log += self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+        for GUI in self.world.GUIs:
+            if(GUI.icon_update):
+                GUI.log_to_GUI(self.display_name + " has been settled in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n")
 
     def getExamineText(self):
         text = super().getExamineText()
@@ -1634,18 +1802,15 @@ class City(Object):
         return text
 
     def Destroy(self):
-        global log
-
-        log += self.display_name + " has been destroyed in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n"
+        for GUI in self.world.GUIs:
+            if(GUI.icon_update):
+                GUI.log_to_GUI(self.display_name + " has been destroyed in " + x_y_to_coord(self.x, self.y) + " at " + time_to_date(self.world.time) + "\n")
 
         for cit in self.citizens:
             self.citizens.remove(cit)
             cit.target_task = None
             cit.city = None
 
-        self.citizens = []
-        self.inventory = []
-        self.tasks = []
         self.faction.members.remove(self)
         self.faction = None
 
@@ -1669,6 +1834,7 @@ class City(Object):
                              "Builder": 1 + (len(self.citizens) // 10),
                              "Carpenter": 1 + (len(self.citizens) // 10),
                              "Lumberjack": 0,
+                             "Potter": 1 + (len(self.citizens) // 10),
                              "Stonecutter": 1 + (len(self.citizens) // 10),
                              "Miner": 0,
                              "Blacksmith": 0,
@@ -1696,12 +1862,10 @@ class City(Object):
 
         houses_count = 0
         for struc in strucs:
-            struc.been_used = False
-
             if(isinstance(struc, Citizen)):
                 if(not struc.city):
                     struc.join_city(self)
-                    continue
+                    continue  # So we don't get the task to kill the poor fellow.
 
             task = struc.get_task(self)  # We pass ourselves as city argument.
             if(not task):  # This thing dindu tasking.
@@ -1711,18 +1875,19 @@ class City(Object):
                 if(self.faction and struc.faction != self.faction):
                     self.faction.adjust_relationship(struc.faction, -3)
 
+            elif(isinstance(struc, Rocky)):
+                self.structure_requests["Mine"] += 1
+
             elif(isinstance(struc, Resource)):
+                struc.been_used = False
                 if(struc.resource):
-                    if(self.resources[struc.resource] >= 50 * self.action_time * len(self.citizens)):  # We have enough of this...
+                    if(self.resources[struc.resource] >= 2 * self.action_time * len(self.citizens)):  # We have enough of this...
                         continue
 
-                    if(isinstance(struc, Tall_Grass)):
-                        if(food_required > 0):
-                            food_required -= struc.resource_multiplier * struc.default_resource_multiplier * citizen.action_time
-
-                    elif(isinstance(struc, Farm)):
-                        if(food_required > 0):
-                            food_required -= struc.resource_multiplier * struc.default_resource_multiplier * citizen.action_time * 3
+                    if(struc.resource == "food"):
+                        if(food_required <= 0):
+                            continue
+                        food_required -= struc.default_resource_multiplier * struc.resource_multiplier * Citizen.action_time
 
                     elif(isinstance(struc, Forest)):
                         self.job_requests["Lumberjack"] += 1
@@ -1758,7 +1923,7 @@ class City(Object):
             self.tool_requests[tool.job] -= 1
             if(isinstance(tool, Tool)):
                 if(self.tool_requests[tool.job] <= 0):
-                    self.tasks.append({"priority": 5, "jobs": ["Peasant"], "task": "break", "item": tool, "target": self, "allowed_peasants": True, "dist_required": -1})
+                    self.tasks.append({"priority": 5, "jobs": ["Peasant"], "task": "break", "item": tool, "target": self, "allowed_peasants": True, "dist_required": -1, "require_action": False})
 
         for tool_request in self.tool_requests:
             if(self.tool_requests[tool_request] <= 0):
@@ -1767,20 +1932,32 @@ class City(Object):
             if(not tool_type):
                 continue
             for task_ in range(0, self.tool_requests[tool_request]):
-                self.tasks.append({"priority": tool_type.make_priority, "jobs": tool_type.jobs_to_make, "task": "create", "item": tool_type, "target": self, "res_required": {"use_macro": 0}, "allowed_peasants": tool_type.allowed_peasants, "dist_required": -1})
+                self.tasks.append({"priority": tool_type.make_priority, "jobs": tool_type.jobs_to_make, "task": "create", "item": tool_type, "target": self, "res_required": {"use_macro": 0}, "allowed_peasants": tool_type.allowed_peasants, "dist_required": -1, "require_action": True})
 
         for structure_request in self.structure_requests:
             if(self.structure_requests[structure_request] <= 0):
                 continue
-            if(structure_request == "Farm"):
-                for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 1, "jobs" : ["Builder"], "task" : "build", "item" : Farm, "area": strucs, "target": None, "res_required" : {"wood" : 30}, "allowed_peasants" : False, "dist_required": 0})
-            elif(structure_request == "Mine"):
-                for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 3, "jobs" : ["Builder"], "task" : "build", "item" : Mine, "area": strucs, "target": None, "res_required" : {"wood" : 30}, "allowed_peasants" : False, "dist_required": 0})
-            elif(structure_request == "House"):
-                for task in range(0, self.structure_requests[structure_request]):
-                    self.tasks.append({"priority" : 3, "jobs" : ["Builder"], "task" : "build", "item" : House, "area": strucs, "target": None, "res_required" : {"wood" : 30, "stone" : 30}, "allowed_peasants" : False, "dist_required": 0})
+            structure = text_to_path(structure_request)
+
+            has_required = True
+            requirements_ = structure.requirements.copy()
+            builder_jobs = []
+            for res in structure.requirements:
+                if(res == "restype_"):
+                    for pos_res in structure.possible_resources:
+                        if(self.resources[pos_res] >= structure.requirements[res]):
+                            requirements_[pos_res] = requirements_.pop(res)
+                            builder_jobs.append(structure.resource_builder_job[pos_res])
+                            break
+                    else:
+                        has_required = False
+                elif(self.resources[res] < structure.requirements[res]):
+                    has_required = False
+                else:
+                    builder_jobs.append(structure.resource_builder_job[res])
+
+            if(has_required):
+                self.tasks.append({"priority": structure.make_priority, "jobs": builder_jobs, "task": "build", "item": structure, "area": strucs, "target": None, "res_required": requirements_, "allowed_peasants": False, "dist_required": 0, "require_action": True})
 
         sorted_list = []
         to_sort = self.tasks.copy()
@@ -1865,9 +2042,9 @@ class City(Object):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Unfriendly" or relation == "Neutral" or relation == "Friendly"):
-                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "put", "res_required" : {random.choice(["food", "wood", "stone"]) : random.randint(10, 20)}, "target" : self, "allowed_peasants" : True, "dist_required": -1}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "put", "res_required" : {random.choice(["food", "wood", "stone"]) : random.randint(10, 20)}, "target" : self, "allowed_peasants" : True, "dist_required": -1, "require_action": False}
             if(relation == "Hostile"):
-                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "kidnap", "target" : self, "allowed_peasants" : True, "dist_required": -1}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "kidnap", "target" : self, "allowed_peasants" : True, "dist_required": -1, "require_action": True}
         return super().get_task(city)
 
     def fire_act(self, severity):
@@ -1878,14 +2055,24 @@ class City(Object):
 class Structure(Resource):
     icon_color = "grey"
     overlayable = True
-    size = 5
+    def_size = 5
     priority = 12
 
-    def __init__(self, loc, faction=None):
+    make_priority = 0
+    possible_resources = []
+    resource_builder_job = {"wood": "Builder", "stone": "Builder", "clay": "Potter"}
+    resource_integrity = {"wood": 1.0, "stone": 2.0, "clay": 1.5}
+    can_be_built_on = []
+
+    requirements = {}
+
+    def __init__(self, loc, faction=None, material="wood"):
         self.faction = faction
         if(faction):
-            faction.add_to_faction(self)
+            faction.members.append(self)
         super().__init__(loc)
+        self.material = material
+        self.integrity *= self.resource_integrity[self.material]
 
     def set_icon(self):
         self.icon = {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
@@ -1894,34 +2081,36 @@ class Structure(Resource):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Hostile"):
-                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True, "dist_required": 0}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True, "dist_required": 0, "require_action": True}
         return super().get_task(city)
+
+    def getExamineText(self):
+        return super().getExamineText() + " Made out of: " + self.material + "."
 
     def Destroy(self):
         if(self.faction):
             self.faction.members.remove(self)
-        self.faction = None
         super().Destroy()
         del self
 
 class Construction(Structure):
     icon_symbol = "C"
     name = "Construction"
-    default_description = "When Construction will grow up, it will become a big Structure!."
+    default_description = "When Construction will grow up, it will become a big Structure!"
 
     can_ignite = True
     ignition_point = 1100
     absorb_coefficient = 1.0
 
-    def __init__(self, loc, to_construct, struc_type, faction=None):
-        super().__init__(loc, faction)
+    def __init__(self, loc, to_construct, struc_type, faction=None, material="wood"):
+        super().__init__(loc, faction, material)
         self.to_construct = to_construct
         self.struc_type = struc_type
 
     def construct(self, severity):
         self.to_construct = max(self.to_construct - severity, 0)
         if(self.to_construct <= 0 and not self.qdeling):
-            self.struc_type(self.loc, self.faction)
+            self.struc_type(self.loc, self.faction, self.material)
             self.qdel()
             del self
 
@@ -1929,8 +2118,8 @@ class Construction(Structure):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
             if(relation == "Hostile"):
-                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True, "dist_required": 0}
-        return {"priority" : 1, "jobs" : ["Builder"], "task" : "construct", "target" : self, "allowed_peasants" : False, "dist_required": 0}
+                return {"priority" : 2, "jobs" : ["Peasant"], "task" : "claim", "target" : self, "allowed_peasants" : True, "dist_required": 0, "require_action": True}
+        return {"priority" : 1, "jobs" : ["Builder"], "task" : "construct", "target" : self, "allowed_peasants" : False, "dist_required": 0, "require_action": True}
 
     def fire_act(self, severity):
         self.crumble(severity)
@@ -1946,6 +2135,12 @@ class House(Structure):
     can_ignite = True
     ignition_point = 1100
     absorb_coefficient = 1.0
+
+    make_priority = 3
+    possible_resources = ["stone", "clay"]
+    can_be_built_on = [Plains, Hills, Swampy]
+
+    requirements = {"restype_": 30}
 
     def fire_act(self, severity):
         self.crumble(severity)
@@ -1971,6 +2166,12 @@ class Farm(Structure):
     ignition_point = 1100
     absorb_coefficient = 1.0
 
+    make_priority = 3
+    possible_resources = ["wood", "clay"]
+    can_be_built_on = [Plains]
+
+    requirements = {"restype_": 30}
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
@@ -1991,6 +2192,12 @@ class Mine(Structure):
     default_resource_multiplier = 1.3
     def_amount = 500
 
+    make_priority = 3
+    possible_resources = ["stone", "clay"]
+    can_be_built_on = [Rocky]
+
+    requirements = {"restype_": 30}
+
 
 # Mobs.
 class Citizen(Mob):
@@ -1999,10 +2206,11 @@ class Citizen(Mob):
     icon_font = ("Courier", 7)
     priority = 29  # Real high.
     overlayable = True
-    size = 1
+    def_size = 1
 
     max_actions_to_perform = 4
     max_work_per_action_time = 16  # Tasks take twice as much as walking.
+    can_work = True  # Toddlers do not work.
 
     needs_processing = True
     action_time = 4
@@ -2019,6 +2227,7 @@ class Citizen(Mob):
         self.resources = {"food": 30,  # We give them some starting food.
                           "water": 30,
                           "wood": 0,
+                          "clay": 0,
                           "stone": 0,
                           "iron": 0,
                           "gold": 0}
@@ -2084,7 +2293,7 @@ class Citizen(Mob):
                 return False  # We dead.
 
         if(self.malnutrition > 0):
-            self.malnutrition = max([self.malnutrition - round(self.saturation / (self.max_saturation) * self.action_time), 0])
+            self.malnutrition = max([self.malnutrition - int(round(self.saturation / (self.max_saturation)) * self.action_time), 0])
 
         """
         Generates the most basic of
@@ -2096,9 +2305,9 @@ class Citizen(Mob):
         self.personal_tasks = []
         if(self.resources["food"] <= 0 and self.city):  # If no food left in pockets, grab a full day worth of meals.
             # We append this to actual proper tasks, since we don't want this erased.
-            self.personal_tasks.append({"task": "grab", "res_required": {"food": round(self.hunger_rate * self.action_time) * 5}, "target": self.city, "dist_required": -1})
+            self.personal_tasks.append({"task": "grab", "res_required": {"food": int(round(self.hunger_rate * self.action_time) * 6)}, "target": self.city, "dist_required": -1, "require_action": False})
         if(self.saturation < self.max_saturation):
-            self.personal_tasks.append({"task": "eat", "res_required": {"food": self.max_saturation - self.saturation}})
+            self.personal_tasks.append({"task": "eat", "res_required": {"food": self.max_saturation - self.saturation}, "require_action": False})
         if(self.actions_to_perform <= 0):
             """
 
@@ -2113,7 +2322,7 @@ class Citizen(Mob):
             """
 
             for i in range(0, self.max_actions_to_perform - self.actions_to_perform + 1):
-                self.personal_tasks.append({"task": "rest", "target": self.loc, "dist_required": -1})
+                self.personal_tasks.append({"task": "rest", "target": self.loc, "dist_required": 0, "require_action": False})
 
         for task in self.personal_tasks:
             if(self.work_per_action_time <= 0):
@@ -2179,9 +2388,9 @@ class Citizen(Mob):
                     self.work_per_action_time -= 2
 
                     if(self.city):
-                        self.city.tasks.remove(self.target_task)
                         if(self.city.generating_tasks):  # Task is not ready.
                             break
+                        self.city.tasks.remove(self.target_task)
                         task = self.city.get_prioritized_task_for(self)
                         if(not task):
                             break
@@ -2190,11 +2399,12 @@ class Citizen(Mob):
 
                     self.target_task = None
 
-                elif(result == 1):
+                elif(result == 1):  # If we managed to fail, others probably will too. Remove this task.
                     self.work_per_action_time -= 2
                     if(self.city):
                         if(self.city.generating_tasks):  # Task is not ready.
                             break
+                        self.city.tasks.remove(self.target_task)
                         task = self.city.get_prioritized_task_for(self)
                         if(not task):
                             break
@@ -2223,38 +2433,32 @@ class Citizen(Mob):
                     return 3  # Couldn't find a way to it.
                 return 0
 
-        if(task["task"] == "harvest"):
-            return self.harvest(task["target"])
+        if(task["require_action"] and self.actions_to_perform > -self.max_actions_to_perform and self.can_work):
+            if(task["task"] == "harvest"):
+                return self.harvest(task["target"])
 
-        elif(task["task"] == "create"):
-            return self.create(task["res_required"], task["item"])
+            elif(task["task"] == "create"):
+                return self.create(task["res_required"], task["item"])
 
-        elif(task["task"] == "construct"):
-            return self.construct(task["target"])
+            elif(task["task"] == "construct"):
+                return self.construct(task["target"])
 
-        elif(task["task"] == "build"):
-            look_for = []
-            if(task["item"] == Farm):
-                look_for = [Plains]
-            if(task["item"] == Mine):
-                look_for = [Rocky]
-            if(task["item"] == House):
-                look_for = [Plains, Hills]
-            if(not task["target"]):
-                for struc in task["area"]:
-                    if(is_instance_in_list(struc, look_for)):
-                        task["target"] = struc
-                        return 0  # Well, we are kinda moving.
-            return self.build(task["res_required"], task["item"], task["target"])
+            elif(task["task"] == "build"):
+                if(not task["target"]):
+                    for struc in task["area"]:
+                        if(is_instance_in_list(struc, task["item"].can_be_built_on)):
+                            task["target"] = struc
+                            return 0  # Well, we are kinda moving.
+                return self.build(task["res_required"], task["item"], task["target"])
+
+            elif(task["task"] == "destroy"):
+                return self.destroy(task["target"])
+
+            elif(task["task"] == "kidnap"):
+                return self.kidnap(task["target"])
 
         elif(task["task"] == "rest"):
             return self.rest(task["target"])
-
-        elif(task["task"] == "destroy"):
-            return self.destroy(task["target"])
-
-        elif(task["task"] == "kidnap"):
-            return self.kidnap(task["target"])
 
         elif(task["task"] == "claim"):
             return self.claim(task["target"])
@@ -2262,7 +2466,7 @@ class Citizen(Mob):
         elif(task["task"] == "break"):
             return self.break_tool(task["item"])
 
-        if(task["task"] == "eat"):
+        elif(task["task"] == "eat"):
             return self.eat(task["res_required"])
 
         elif(task["task"] == "grab"):
@@ -2279,14 +2483,12 @@ class Citizen(Mob):
         return 1
 
     def create(self, resources_required, item_type):
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
-            return 1
         if("use_macro" in resources_required):
             resources_required = item_type.res_to_make
             if("restype_" in resources_required):
                 resources_required[self.tool.res_make_of] = resources_required.pop("restype_")
 
-        self.tasks.append({"task": "grab", "res_required": resources_required, "target": self.city, "dist_required": -1})
+        self.tasks.append({"task": "grab", "res_required": resources_required, "target": self.city, "dist_required": -1, "require_action": False})
 
         for res in resources_required:
             if(self.resources[res] <= resources_required[res]):
@@ -2301,15 +2503,13 @@ class Citizen(Mob):
             modifier = modifier * self.tool.res_quality
 
         item_type(self, resources_required, modifier)
-        self.tasks.append({"task": "put_tools", "target": self.city, "dist_required": -1})
+        self.tasks.append({"task": "put_tools", "target": self.city, "dist_required": -1, "require_action": False})
         self.actions_to_perform -= 1
         return 2
 
     def build(self, resources_required, struc_type, loc):
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
-            return 1
-        self.tasks.append({"task": "grab", "res_required": resources_required, "target": self.city, "dist_required": -1})
-        if(self.loc.world.is_overcrowded(loc.x, loc.y, struc_type.size)):
+        self.tasks.append({"task": "grab", "res_required": resources_required, "target": self.city, "dist_required": -1, "require_action": False})
+        if(self.loc.world.is_overcrowded(loc.x, loc.y, struc_type.def_size)):
             return 1
         for res in resources_required:
             if(self.resources[res] <= resources_required[res]):
@@ -2317,32 +2517,26 @@ class Citizen(Mob):
         for res in resources_required:
             self.resources[res] -= resources_required[res]
         self.actions_to_perform -= 1
-        Construction(loc, struc_type.work_required, struc_type, self.city.faction)
+        Construction(loc, struc_type.work_required, struc_type, self.city.faction, list(resources_required)[0])
         return 2
 
     def construct(self, target):
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
-            return 1
         target.construct(int(round(self.quality_modifier * self.action_time)))
         self.actions_to_perform -= 1
         return 2
 
     def harvest(self, target):
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
-            return 1
         if(not target.been_used):
             to_harvest = round(self.action_time * target.resource_multiplier * self.get_tool_quality(target.job_to_harvest))
             harvested = target.harvest(self, to_harvest)
             if(harvested > 0):
                 self.resources[target.resource] += harvested
                 self.actions_to_perform -= 1
-                self.tasks.append({"task": "put", "res_required": {target.resource: harvested}, "target": self.city, "dist_required": -1})
+                self.tasks.append({"task": "put", "res_required": {target.resource: harvested}, "target": self.city, "dist_required": -1, "require_action": False})
                 return 2
         return 1
 
     def rest(self, target):
-        if(target.been_used):
-            return 1
         self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
         if(prob(self.health)):  # A healthy spirit in a healthy body.
             self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
@@ -2354,7 +2548,7 @@ class Citizen(Mob):
         Do not confuse with Destroy(!).
         This proc allows Citizens to destroy their targets.
         """
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
+        if(self.actions_to_perform <= -self.max_actions_to_perform):  # I leave it here because of claim.
             return 1
         damage_to_do = int(round(((self.saturation / (self.max_saturation)) - (self.malnutrition / 100)) * self.action_time))
         if(damage_to_do >= 1):
@@ -2380,8 +2574,6 @@ class Citizen(Mob):
         return False
 
     def kidnap(self, target):
-        if(self.actions_to_perform <= -self.max_actions_to_perform):
-            return 1
         if(len(target.citizens)):
             citizen = random.choice(target.citizens)
             citizen.join_city(self.city)
@@ -2392,7 +2584,7 @@ class Citizen(Mob):
     def claim(self, target):
         if(not target.faction):
             target.faction = self.city.faction
-            self.city.faction.add_to_faction(target)
+            self.city.faction.members.append(target)
             target.update_icon()
         elif(self.destroy(target) and not target.qdeling):  # By "capturing" it, we of course mean murdering it slightly.
                 target.faction.adjust_relationship(self.city.faction, -30)  # I mean claiming other's territory is quite a threat.
@@ -2410,7 +2602,7 @@ class Citizen(Mob):
                 to_put[material] = target.materials[material]
         target.qdel()
         del target
-        self.tasks.append({"task": "put", "res_required": to_put, "target": self.city, "dist_required": -1})
+        self.tasks.append({"task": "put", "res_required": to_put, "target": self.city, "dist_required": -1, "require_action": False})
         return 2
 
     def grab(self, resources_required, target):
@@ -2534,7 +2726,7 @@ class Citizen(Mob):
             if(tool.job != self.job):
                 continue
             if(tool.quality > self.get_tool_quality(self.job)):
-                self.tasks.append({"priority": 1, "task": "equip", "item": tool, "target": self.city, "dist_required": -1})
+                self.tasks.append({"priority": 1, "task": "equip", "item": tool, "target": self.city, "dist_required": -1, "require_action": False})
 
     def set_icon(self):
         self.icon = {"symbol": self.icon_symbol, "color": self.city.faction.color if self.city and not self.city.qdeling else self.icon_color, "font": self.icon_font}
@@ -2542,7 +2734,7 @@ class Citizen(Mob):
     def get_task(self, city):
         if(self.city and city.faction != self.city.faction):
             if(city.faction.get_relationship(self.city.faction) == "Hostile"):
-                return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True, "dist_required": 0}
+                return {"priority" : 1, "jobs" : ["Peasant"], "task" : "destroy", "target" : self, "allowed_peasants" : True, "dist_required": 0, "require_action": True}
         return None
 
     def Destroy(self):
@@ -2563,6 +2755,7 @@ class Toddler(Citizen):
     icon_symbol = "t"
     name = "Toddler"
     max_actions_to_perform = 1
+    can_work = False
 
     def __init__(self, loc, job):
         super().__init__(loc, "Toddler")  # No matter the job given, a Toddler is a Toddler.
@@ -2574,23 +2767,6 @@ class Toddler(Citizen):
         self.max_saturation = random.randrange(10, 21)
         self.saturation = self.max_saturation
         self.hunger_rate = random.uniform(0.35, 0.65)
-
-    def perform_task(self, task):
-        if(("dist_required" in task) and task["target"]):
-            if(self.get_distance(task["target"]) > task["dist_required"]):
-                self.move_towards_to(task["target"], 1)
-                return 0
-        if(task["task"] == "eat"):
-            return self.eat(task["res_required"])
-        elif(task["task"] == "grab"):
-            return self.grab(task["res_required"], task["target"])
-        elif(task["task"] == "put"):
-            return self.put(task["res_required"], task["target"])
-        elif(task["task"] == "equip"):
-            return self.equip(task["item"], task["target"])
-        elif(task["task"] == "put_tools"):
-            return self.put_tools(task["target"])
-        return 1
 
     def find_a_job(self):
         # Toddlers don't really have jobs, but they use this to
@@ -2675,7 +2851,7 @@ class Examine(GUI):
 
         self.wind.title(u'The Tile (%d, %d)' % (self.x_coord, self.y_coord))
         self.wind_wid = max([int(round(4 * self.parent.pixels_per_tile)), self.parent.max_coord_lenght])
-        self.wind_hei = int(round(len(self.structures) * 6 * self.parent.pixels_per_tile))
+        self.wind_hei = int(round(len(self.structures) * 5 * self.parent.pixels_per_tile))
 
         self.content = tkinter.Frame(self.wind, width=self.wind_wid * 1.5, height=self.wind_hei * 2, borderwidth=2, relief="solid")
 
@@ -2695,6 +2871,7 @@ class Examine(GUI):
         self.temp_map_field.pack()
 
         self.inter_cycle = False
+        self.on_icon_update()
 
     def Destroy(self):
         self.parent.wind.focus_force()
@@ -2718,13 +2895,13 @@ class Examine(GUI):
             atom = self.structures[y_]
             atom.Clicked(self.parent, atom.x, atom.y, mods=["shift"])
 
-    def on_cycle(self):
+    def on_icon_update(self):
         if(self.inter_cycle):
             return
 
         self.structures = sort_by_priority(copy.deepcopy(self.parent.cur_world.get_all_tile_contents(self.x_coord, self.y_coord)))
 
-        self.wind_hei = int(round(len(self.structures) * 6 * self.parent.pixels_per_tile))
+        self.wind_hei = int(round(len(self.structures) * 5 * self.parent.pixels_per_tile))
         self.content.configure(height=self.wind_hei * 2)
         self.temp_map_field.configure(height=self.wind_hei)
 
@@ -2755,6 +2932,7 @@ class Examine(GUI):
         self.wind.geometry("+%d+%d" % (self.parent.wind.winfo_x() + self.saved_x, self.parent.wind.winfo_y() + self.saved_y))
         #self.temp_map_field.itemconfigure(self.coordinates, text="Coords: (%s, %s)" % (self.x_coord, self.y_coord))
         self.inter_cycle = False
+        self.on_icon_update()
 
 class Game_Window:
     default_pixels_per_tile = 16.4
@@ -2879,16 +3057,20 @@ class Game_Window:
             if(self.qdeling):
                 if(not self.icon_update and not self.icon_updating):
                     self.cur_world.GUIs.remove(self)
-
                     self.wind.destroy()
             else:
                 self.current_time.config(text="Current Time: " + time_to_date(self.cur_world.time))
-                self.chatlog.itemconfigure(self.chat, text=log)
+
+                """
+                Unused, so disabled for performance.
+
+                TODO: Make a seperate list of windows needed to be on_cycle-ed.
 
                 for window_tag in self.child_windows:
                     if(self.child_windows[window_tag].inter_cycle):
                         continue
                     self.child_windows[window_tag].on_cycle()
+                """
 
             self.wind.after(1, cycle)
 
@@ -2901,6 +3083,12 @@ class Game_Window:
         cycle()
 
         self.wind.mainloop()
+
+    def log_to_GUI(self, message):
+        global log
+        log += message
+
+        self.chatlog.itemconfigure(self.chat, text=log)
 
     def on_click(self, event):
         x_ = int(round(event.x / self.pixels_per_tile - 1))
@@ -2937,6 +3125,13 @@ class Game_Window:
             return
 
         self.icon_updating = True
+
+        for window_tag in self.child_windows:
+            if(self.child_windows[window_tag].inter_cycle):
+                continue
+            if(x == self.child_windows[window_tag].x_coord and y == self.child_windows[window_tag].y_coord):
+                self.child_windows[window_tag].on_icon_update()
+
         coord = x_y_to_coord(x, y)
 
         if(not coord in self.map_field_overlays):
@@ -2954,6 +3149,6 @@ prepare_lists()
 
 The_Map = World(1)  # World initiation on z = 1.
 
-threading.Thread(target=master_controller).start()  # Controller start up.
+threading.Thread(target=Game_Window, args=[The_Map]).start()  # Opening the gui window.
 
-Game_Window(The_Map)  # Opening the gui window.
+master_controller()  # Controller start up.
