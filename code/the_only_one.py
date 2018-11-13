@@ -519,6 +519,10 @@ class Faction:
         for faction in factions:
             if(faction.qdeling):
                 continue
+            if(not len(faction.members)):  # "Dead" factions do not pollute political namespace.
+                faction.qdel()
+                del faction
+                continue
             faction.relationships[self] = 0
             self.relationships[faction] = 0
 
@@ -527,6 +531,8 @@ class Faction:
     def get_relationship(self, faction):
         if(not faction):
             return "Hostile"  # Who doesn't belong to our friends is a foe!
+        print(self.name)
+        print(faction.name)
         if(self.relationships[faction] >= 100):
             return "Alliance"
         elif(self.relationships[faction] >= 50):
@@ -565,10 +571,10 @@ class Faction:
 
 # Atoms.
 class Atom:
-    icon = None  # A dict with lower qualities, or something else. Is set in set_icon(), updated in world using update_icon().
-    icon_symbol = ""
-    icon_color = "green"
-    icon_font = 'TkFixedFont'
+    icon = None  # A dict with lower qualities, or something else. Is updated on GUI in update_icon(), override manually where needed, does not automatically update.
+    def_icon_symbol = ""
+    def_icon_color = "green"
+    def_icon_font = 'TkFixedFont'
     overlayable = False
     block_overlays = False
     priority = 0
@@ -580,6 +586,15 @@ class Atom:
     temp_per_integrity_point = 100  # Absorbed temperature is divided by this to determine by how much to fire_act().
 
     # Do note, that temp_per_integrity_point just called fire_act(), not crumble(), so things without fire_act() defined will not break from temperature.
+
+    # on_charge_gain stuff.
+    siemens_coefficient = 0.0  # How much charge do we transfer to stuff around us.
+    specific_resistance = 0.0  # How much charge will not be passed to others, but instead turned into heat in us.
+    store_coefficient = 0.0    # How much charge will be actually stored in us.
+    charge_per_integrity_point = 100
+    charge_glow = False        # Whether Atom turns yellow when it is charged.
+
+    # 1 only_one_Joule of charge is ~= 1 only_one_Fahrenheit of heat.
 
     name = ""
     default_description = "I am an Atom."
@@ -598,18 +613,21 @@ class Atom:
         self.x = -1
         self.y = -1
         self.loc = None
+        self.contents = []
         self.world = None
 
-        self.contents = []
         self.size = self.def_size
         self.integrity = self.def_size
-        self.set_icon()
+
+        self.icon = {"symbol": self.def_icon_symbol, "color": self.def_icon_color, "font": self.def_icon_font}
 
         if(isinstance(loc, Atom) and loc.qdeling):
             del self
             return
 
         self.move_atom_to(loc)
+
+        self.charge = 0  # How much charge is stored in us.
 
         # Since "name" is more of a type, really.
         self.display_name = self.name
@@ -652,7 +670,7 @@ class Atom:
             GUI.log_to_GUI(self.getExamineText() + "\n")
 
     def getExamineText(self):
-        return str(self.icon_symbol) + " [" + self.display_name + "] " + self.default_description
+        return str(self.icon["symbol"]) + " [" + self.display_name + "] " + self.default_description
 
     def get_world(self):
         if(isinstance(self.loc, World)):
@@ -677,6 +695,8 @@ class Atom:
         return abs(to_dist.x - self.x) + abs(to_dist.y - self.y)
 
     def move_atom_to(self, loc):
+        if(self.qdeling):
+            return
         if(self.loc):
             self.loc.contents.remove(self)
             if(isinstance(self.loc, Turf)):
@@ -753,6 +773,58 @@ class Atom:
         self.fire_act((temperature - absorbed) // self.temp_per_integrity_point)
         return absorbed
 
+    def on_charge_gain(self, charge, source):
+        """
+        While Atoms do have a charge, I
+        prefer to use this method as well
+        to fully represent what happens to an atom.
+        """
+        if(charge < self.charge): # Pfft.
+            return 0  # No gain.
+
+        charge_left = self.charge - charge
+        charge_removed = charge * self.specific_resistance
+
+        if(charge_removed > 0):
+            charge_left -= charge_removed
+            self.on_temp_gain(charge_removed, self)
+
+        if(not self.qdeling):
+            if(self.charge_glow):
+                self.icon["color"] = "yellow"
+                self.update_icon()
+
+            self.electrocute_act((charge - charge_removed) // self.charge_per_integrity_point, self)
+
+            strucs = self.world.get_region_contents(self.x, self.y, 1, 1)
+
+            random.shuffle(strucs)
+
+            for content in strucs:
+                if(charge_left <= 0):
+                    if(self.charge_glow):
+                        self.icon["color"] = self.def_icon_color
+                        self.update_icon()
+                    return 0
+
+                if(content.charge > self.charge):
+                    to_discharge = (content.charge - self.charge) * content.siemens_coefficient
+                    charge_left += to_discharge
+                    content.charge -= to_discharge
+                    continue
+
+                self.charge_left -= content.on_charge_gain(self.charge_left * self.siemens_coefficient, self)
+
+        self.charge += charge_left * self.store_coefficient
+        """
+        Add this when we have Controller and subsystems.
+
+        if(self.charge > 0 and not self.processing):
+            self.processing = True
+            self.world.process_atoms.append(self)
+        """
+        return charge_left
+
     def fire_act(self, severity):
         """
         What this atom should do upon being lit on fire.
@@ -767,7 +839,6 @@ class Atom:
         electricity source. If you return True, it means
         the atom conducts electricity.
         """
-        self.on_temp_gain(severity * 1034, source)  # Lightning has severity 10, and temperature of 10340(Fahrenheit(!), as all things here.)
         return False
 
     def get_task(self, city):
@@ -792,11 +863,7 @@ class Atom:
         del self
 
     def update_icon(self):
-        self.set_icon()
         self.world.update_coord_icon(self.x, self.y)
-
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.icon_color, "font": self.icon_font}
 
 
 class Area(Atom):
@@ -888,40 +955,57 @@ class Mob(Movable):
 
 #Turfs.
 class Plains(Turf):
-    icon_symbol = "_"
+    def_icon_symbol = "_"
     name = "Plains"
     default_description = "A plain sight, not much to see."
     allowed_contents = {"Nothing": 100, "Tall_Grass": 30, "Forest": 5}
 
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.1
+    specific_resistance = 1.0
+    store_coefficient = 0.0
+
 
 class Hills(Turf):
-    icon_symbol = "-"
+    def_icon_symbol = "-"
     name = "Hills"
     default_description = "Hilly terrain. Up and down..."
     allowed_contents = {"Nothing": 100, "Forest": 1}
 
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.1
+    specific_resistance = 1.0
+    store_coefficient = 0.0
+
 
 class Rocky(Turf):
-    icon_symbol = "="
+    def_icon_symbol = "="
     name = "Rocky"
     default_description = "Hills, but with a slight chance of rocks being around."
     allowed_contents = {"Nothing": 100, "Mountain": 10, "Dormant_Volcano": 5, "Iron_Deposit": 3, "Gold_Deposit": 1, "Forest": 1, "Volcano": 1}
 
     absorb_coefficient = 0.5  # Stones are terrible at heat absorbtion.
 
+    siemens_coefficient = 0.0  # Stones are terrible electricity conductors.
+    specific_resistance = 0.0  # Not a single frisk given.
+    store_coefficient = 0.0
+
 
 class Swampy(Turf):
-    icon_symbol = "_"
-    icon_color = "DarkOliveGreen3"
+    def_icon_symbol = "_"
+    def_icon_color = "DarkOliveGreen3"
     name  = "Swampy"
     default_description = "Swamp land, covered in swamp, and is swamp all around. What are they doing here?"
     allowed_contents = {"Nothing": 100, "Reeds": 30, "Eathernware": 10}
 
     temp_per_integrity_point = 200
+
+    siemens_coefficient = 0.9
+    specific_resistance = 0.5
+    store_coefficient = 1.0
+    charge_glow = True
 
     def crumble(self, severity):
         self.integrity -= severity
@@ -933,14 +1017,14 @@ class Swampy(Turf):
     def on_temp_gain(self, temperature, source):
         absorbed = min([temperature, self.integrity * self.size * self.absorb_coefficient * source.action_time])
         if(temperature - absorbed >= 212 and not is_type_in_list(Steam, self.contents)):
-            Steam(self, temperature - absorbed)
+            Steam(self, temperature - absorbed, (temperature - absorbed) // self.temp_per_integrity_point)
             self.crumble((temperature - absorbed) // self.temp_per_integrity_point)
         return temperature
 
 
 class Sandy(Turf):
-    icon_symbol = "_"
-    icon_color = "burlywood1"
+    def_icon_symbol = "_"
+    def_icon_color = "burlywood1"
 
     def_size = 15  # Sand is much less durable to Constructions.
 
@@ -950,9 +1034,13 @@ class Sandy(Turf):
 
     absorb_coefficient = 2.0  # Sand gets heated very easily.
 
+    siemens_coefficient = 0.0  # Doesn't conduct electricity.
+    specific_resistance = 0.0  # Doesn't get heated by electricity, because see above.
+    store_coefficient = 0.0    # Doesn't store electricity.
+
 
 class Desert_Sand(Sandy):
-    icon_color = "tan1"
+    def_icon_color = "tan1"
 
     name = "Desert_Sand"
     default_description = "Sand. Isn't sand the same anywhere? It's just sand."
@@ -960,12 +1048,17 @@ class Desert_Sand(Sandy):
 
 
 class Basalt(Turf):
-    icon_symbol = "="
-    icon_color = "gray16"
+    def_icon_symbol = "="
+    def_icon_color = "gray16"
     name = "Basalt"
     default_description = "What's left of a great disaster a Volcano proposes."
 
     absorb_coefficient = 0.1  # Allows Lava to easily flow over it.
+
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
+
 
     def on_temp_gain(self, temperature, source):
         # Allows Lava to easily flow over it, and us to avoid some unnecessary checks.
@@ -973,13 +1066,17 @@ class Basalt(Turf):
 
 
 class Lava(Turf):
-    icon_symbol = "~"
-    icon_color = "orange red"
+    def_icon_symbol = "~"
+    def_icon_color = "orange red"
     name = "Lava"
     default_description = "Lava to spread. Lava to burn."
 
     needs_processing = True
     action_time = 3
+
+    siemens_coefficient = 0.0  # Lava is still rocks, just melted.
+    specific_resistance = 0.0
+    store_coefficient = 0.0
 
     def __init__(self, loc, amount=3):
         self.amount = int(amount)  # How many times will it be able to spread.
@@ -1000,7 +1097,7 @@ class Lava(Turf):
         random.shuffle(pos_turfs)
 
         for turf in pos_turfs:
-            for content in turf.contents:
+            for content in turf.contents + [turf]:
                 absorbed = content.on_temp_gain(self.temperature, self)
                 self.temperature -= absorbed
 
@@ -1013,8 +1110,8 @@ class Lava(Turf):
 
 
 class Water(Turf):
-    icon_symbol = "~"
-    icon_color = "blue"
+    def_icon_symbol = "~"
+    def_icon_color = "blue"
     name = "Water"
     default_description = "Wet. Moist. Is a fluid."
     allowed_contents = {"Nothing": 100, "Fresh_Water": 30, "Reeds": 10}
@@ -1022,50 +1119,14 @@ class Water(Turf):
     action_time = 1
     temp_per_integrity_point = 300  # Water is slightly more resilitent to heat, and has it's own mechanic.
 
+    siemens_coefficient = 1.0
+    specific_resistance = 0.5
+    store_coefficient = 1.0
+    charge_glow = True
+
     def __init__(self, loc):
         self.charge = 0
         super().__init__(loc)
-
-    def process(self):
-        self.update_icon()
-        coords = self.world.get_region_coordinates(self.x, self.y, 1, 1)
-        random.shuffle(coords)
-        for coord in coords:
-            # When it's our own tile, we electrocute everything on it,
-            # else, only water.
-            el_all_on_tile = False
-            coord_list = coord.split("/")
-            x_ = int(coord_list[0])
-            y_ = int(coord_list[1])
-            strucs = []
-            if(self.x == x_ and self.y == y_):
-                el_all_on_tile = True
-                strucs = self.contents
-            else:
-                strucs = self.world.get_all_tile_contents(x_, y_)
-
-            for struc in strucs:
-                if(self.charge <= 0):
-                    self.update_icon()
-                    self.processing = False
-                    self.world.process_atoms.remove(self)
-                    return
-                if(el_all_on_tile or isinstance(struc, Water)):
-                    # Nothing passes the charge fully.
-                    struc.electrocute_act(1, self)
-                    self.charge -= 1
-
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": "yellow" if self.charge else self.icon_color, "font": self.icon_font}
-
-    def electrocute_act(self, severity, source):
-        super().electrocute_act(severity, source)
-        to_shock = max([severity - self.charge, 0])
-        if(to_shock > 0):
-            self.charge += to_shock
-            self.processing = True
-            self.world.process_atoms.append(self)
-        return True
 
     def crumble(self, severity):
         self.integrity -= severity
@@ -1082,7 +1143,7 @@ class Water(Turf):
         return temperature
 
 class Deep_Water(Water):
-    icon_color = "dark blue"
+    def_icon_color = "dark blue"
     name = "Deep_Water"
     default_description = "Just like water, but deeper."
     allowed_contents = {}
@@ -1105,7 +1166,7 @@ class Nothing(Object):
     It has been used before to generate
     in contents when we needed to skip.
     """
-    icon_symbol = ""
+    def_icon_symbol = ""
     name = "Nothing"
 
     def __init__(self, loc):
@@ -1113,9 +1174,9 @@ class Nothing(Object):
 
 """
 class Tornado(Object):
-    icon_symbol = "@"
-    icon_color = "thistle3"
-    icon_font = ("Courier", 8)
+    def_icon_symbol = "@"
+    def_icon_color = "thistle3"
+    def_icon_font = ("Courier", 8)
     priority = 100  # Thing's quite noticeable.
     overlayable = True
     def_size = 10  # Acts as it's max size.
@@ -1134,7 +1195,7 @@ class Tornado(Object):
         self.target = None  # We will be moving towards it.
 
     def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.icon_color, "font": ("Courier", 6 + self.size)}
+        self.icon = {"symbol": self.def_icon_symbol, "color": self.def_icon_color, "font": ("Courier", 6 + self.size)}
 
     def process(self):
         self.size = min([self.def_size, int(self.wind_speed // 9)])
@@ -1192,9 +1253,9 @@ class Tornado(Object):
 """
 
 class Steam(Object):
-    icon_symbol = "*"
-    icon_color = "gray80"
-    icon_font = ("Courier", 8)
+    def_icon_symbol = "*"
+    def_icon_color = "gray80"
+    def_icon_font = ("Courier", 8)
     priority = 4
     overlayable = True
 
@@ -1203,6 +1264,11 @@ class Steam(Object):
 
     action_time = 1
     needs_processing = True
+
+    # It doesn't have anything to conduct with.
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
 
     def __init__(self, loc, temperature=212, amount=20):
         super().__init__(loc)
@@ -1235,17 +1301,18 @@ class Steam(Object):
             for content in turf.contents + [turf]:
                 absorbed = content.on_temp_gain(self.temperature, self)
                 self.temperature -= absorbed
-            if(not is_type_in_list(Steam, turf.contents) and self.temperature >= 212 and self.amount > 1):
-                Steam(turf, self.temperature, self.amount - 1)
-                self.amount -= 1
+            if(not is_type_in_list(Steam, turf.contents) and self.temperature >= 212 and self.amount > 0):
+                to_spread = int(round(self.amount // 8))
+                Steam(turf, self.temperature, to_spread)
+                self.amount -= to_spread
 
     def on_temp_gain(self, temperature, source):
         return temperature  # Fully absorbs to prevent Steam circle-spawning.
 
 
 class Fire(Object):
-    icon_symbol = "x"
-    icon_color = "red"
+    def_icon_symbol = "x"
+    def_icon_color = "red"
     priority = 19
     overlayable = True
 
@@ -1255,6 +1322,10 @@ class Fire(Object):
 
     action_time = 3
     needs_processing = True
+
+    siemens_coefficient = 0.0  # Cause it's a Fire.
+    specific_resistance = 0.0
+    store_coefficient = 0.0
 
     def __init__(self, loc, temperature=1100):
         super().__init__(loc)
@@ -1280,11 +1351,9 @@ class Fire(Object):
                 continue
             for struc in strucs:
                 struc.on_temp_gain(self.temperature, self)
+        self.icon["font"] = ("Courier", self.integrity * 3)
         self.update_icon()
         self.crumble(1)
-
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.icon_color, "font": ("Courier", self.integrity * 3)}
 
     def on_temp_gain(self, temperature, source):
         return 0  # Prevent Fires circle-ignting.
@@ -1300,20 +1369,24 @@ class Fire(Object):
 
 
 class Lightning(Object):
-    icon_symbol = "z"
-    icon_color = "yellow"
+    def_icon_symbol = "z"
+    def_icon_color = "yellow"
     name = "Lightning"
     default_description = "It is before the Thunder."
-    def_size = 1
+    def_size = 0
     priority = 100  # Pretty "light".
 
-    def __init__(self, loc, power=10):
+    siemens_coefficient = 1.0  # This is there, but there is really no point in this.
+    specific_resistance = 1.0
+    store_coefficient = 1.0
+
+    def __init__(self, loc, power=10340):
         super().__init__(loc)
-        power = int(power)
+        self.power = int(power)
         strucs = self.world.get_all_tile_contents(self.x, self.y)
 
         for struc in strucs:
-            struc.electrocute_act(power, self)
+            struc.on_charge_gain(self.power, self)
 
         self.qdel()
         del self
@@ -1410,7 +1483,7 @@ class Tall_Grass(Resource):
     def_size = 3
     priority = 3
 
-    icon_symbol = "|"
+    def_icon_symbol = "|"
 
     harvestable = True
     allow_peasants = True
@@ -1425,6 +1498,10 @@ class Tall_Grass(Resource):
     ignition_point = 580
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.3
+    specific_resistance = 0.9  # Easily.
+    store_coefficient = 0.1
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
@@ -1436,8 +1513,8 @@ class Reeds(Resource):
     def_size = 3
     priority = 3
 
-    icon_color = "brown"
-    icon_symbol = "|"
+    def_icon_color = "brown"
+    def_icon_symbol = "|"
 
     harvestable = True
     allow_peasants = True
@@ -1452,6 +1529,10 @@ class Reeds(Resource):
     ignition_point = 500
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.9
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
@@ -1463,9 +1544,9 @@ class Fresh_Water(Resource):
     def_size = 3
     priority = 3
 
-    icon_font = ("Courier", 8)
-    icon_color = "royal blue"
-    icon_symbol = "~"
+    def_icon_font = ("Courier", 8)
+    def_icon_color = "royal blue"
+    def_icon_symbol = "~"
 
     harvestable = True
     allow_peasants = True
@@ -1479,6 +1560,10 @@ class Fresh_Water(Resource):
     absorb_coefficient = 1.0
     temp_per_integrity_point = 100
 
+    siemens_coefficient = 0.3  # Is a really meh conductor.
+    specific_resistance = 0.6
+    store_coefficient = 0.3
+    charge_glow = True
 
     def fire_act(self, severity):
         if(not is_type_in_list(Steam, self.loc.contents)):
@@ -1488,7 +1573,7 @@ class Fresh_Water(Resource):
 
 
 class Forest(Resource):
-    icon_symbol = "^"
+    def_icon_symbol = "^"
     name = "Forest"
     default_description = "A place for trees to go, for a Lumberjack to cut."
     def_size = 10
@@ -1505,14 +1590,18 @@ class Forest(Resource):
     ignition_point = 580
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.3
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
 
 class Palms(Resource):
-    icon_symbol = "^"
-    icon_color = "brown"
+    def_icon_symbol = "^"
+    def_icon_color = "brown"
 
     name = "Palms"
     default_description = "These ones do not seem to have bananas on them."
@@ -1530,14 +1619,18 @@ class Palms(Resource):
     ignition_point = 600  # Slightly higher than in forests.
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.3
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+
     def fire_act(self, severity):
         self.crumble(severity)
         return True
 
 
 class Cacti(Resource):
-    icon_symbol = "!"
-    icon_color = "dark green"
+    def_icon_symbol = "|"
+    def_icon_color = "dark green"
 
     name = "Cacti"
     default_description = "They are green and spiky."
@@ -1555,6 +1648,10 @@ class Cacti(Resource):
     ignition_point = 700  # They have plenty of water in them.
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.3
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+
     def harvest(self, harvester, amount):
         # They are spiky, and that should be represented.
         to_return = super().harvest(harvester, amount)
@@ -1570,8 +1667,8 @@ class Cacti(Resource):
 
 
 class Eathernware(Resource):
-    icon_symbol = "o"
-    icon_color = "plum2"
+    def_icon_symbol = "o"
+    def_icon_color = "plum2"
     name = "Eathernware"
     default_description = "A type of clay that is not of best quality."
     def_size = 3
@@ -1587,10 +1684,14 @@ class Eathernware(Resource):
 
     absorb_coefficient = 0.1  # Clay is very bad in absorbing heat. But it probably should get cooked or something.
 
+    siemens_coefficient = 0.9
+    specific_resistance = 0.1
+    store_coefficient = 0.1
+
 
 class Mountain(Resource):
-    icon_symbol = "A"
-    icon_color = "gray26"
+    def_icon_symbol = "A"
+    def_icon_color = "gray26"
     block_overlays = True
     name = "Mountain"
     default_description = "A rock of rocks, that is rockier than most."
@@ -1607,10 +1708,14 @@ class Mountain(Resource):
 
     absorb_coefficient = 0.5  # Stones are bad at absorbing heat.
 
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
+
 
 class Sandstone_Mountain(Resource):
-    icon_symbol = "A"
-    icon_color = "tan1"
+    def_icon_symbol = "A"
+    def_icon_color = "tan1"
     block_overlays = True
     name = "Sandstone_Mountain"
     default_description = "A mountain of sand."
@@ -1626,6 +1731,10 @@ class Sandstone_Mountain(Resource):
     def_amount = 500
 
     absorb_coefficient = 2.0  # Sand is heated easily.
+
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
 
 
 class Dormant_Volcano(Mountain):
@@ -1646,7 +1755,7 @@ class Dormant_Volcano(Mountain):
 
 
 class Volcano(Mountain):
-    icon_color = "orange red"
+    def_icon_color = "orange red"
     name = "Volcano"
     default_description = "A geyser to spit lava."
 
@@ -1682,8 +1791,8 @@ class Volcano(Mountain):
 
 
 class Iron_Deposit(Resource):
-    icon_symbol = "i"
-    icon_color = "gray99"
+    def_icon_symbol = "i"
+    def_icon_color = "gray99"
     name = "Iron_Deposit"
     default_description = "It has iron in it!"
     obstruction = True
@@ -1700,10 +1809,15 @@ class Iron_Deposit(Resource):
 
     absorb_coefficient = 2.0  # Iron is super conductive.
 
+    siemens_coefficient = 1.0  # Iron is super conductive.
+    specific_resistance = 0.1
+    store_coefficient = 1.0
+    charge_glow = True
+
 
 class Gold_Deposit(Resource):
-    icon_symbol = "g"
-    icon_color = "gold"
+    def_icon_symbol = "g"
+    def_icon_color = "gold"
     name = "Gold_Deposit"
     default_description = "It has gold in it!"
     obstruction = True
@@ -1720,11 +1834,15 @@ class Gold_Deposit(Resource):
 
     absorb_coefficient = 1.0  # Gold should melt probably.
 
+    siemens_coefficient = 0.0
+    specific_resistance = 0.1
+    store_coefficient = 0.0
+
 
 class Tool(Object):
-    icon_color = "grey"
-    icon_font = ("Courier", 5)
-    icon_symbol = "t"  # We use lowercase of the first letter.
+    def_icon_color = "grey"
+    def_icon_font = ("Courier", 5)
+    def_icon_symbol = "t"  # We use lowercase of the first letter.
 
     overlayable = True
     priority = 2
@@ -1744,8 +1862,12 @@ class Tool(Object):
     absorb_coefficient = 1.0  # I mean, they do break from it.
     def_tool_uses = 200
 
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
+
     def __init__(self, loc, materials={"wood" : 5}, quality_modifier=1):
-        self.set_icon()
+        self.icon = {"symbol": self.def_icon_symbol, "color": self.def_icon_color, "font": self.def_icon_font}
         self.qdeling = False
         self.loc = None
         self.world = None
@@ -1758,8 +1880,12 @@ class Tool(Object):
         self.integrity = 1
 
     def crumble(self, severity):
-        self.tool_uses -= severity * 10
-        return True  # TODO: Tool breaking instead of structure breaking.
+        self.tool_uses -= severity * 20
+        if(self.tool_uses <= 0):
+            self.qdel()
+            del self
+            return True  # TODO: Tool breaking instead of structure breaking.
+        return False
 
     def fire_act(self, severity):
         self.crumble(severity)
@@ -1783,7 +1909,7 @@ class Tool(Object):
 
 
 class Hoe(Tool):
-    icon_symbol = "h"
+    def_icon_symbol = "h"
     name = "Hoe"
     job = "Farmer"
     make_priority = 3
@@ -1793,7 +1919,7 @@ class Hoe(Tool):
 
 
 class Hammer(Tool):
-    icon_symbol = "h"
+    def_icon_symbol = "h"
     name = "Hammer"
     job = "Builder"
     make_priority = 3
@@ -1803,7 +1929,7 @@ class Hammer(Tool):
 
 
 class Axe(Tool):
-    icon_symbol = "a"
+    def_icon_symbol = "a"
     name = "Axe"
     job = "Lumberjack"
     make_priority = 3
@@ -1813,7 +1939,7 @@ class Axe(Tool):
 
 
 class Sledgehammer(Tool):
-    icon_symbol = "s"
+    def_icon_symbol = "s"
     name = "Sledgehammer"
     job = "Blacksmith"
     make_priority = 4
@@ -1823,7 +1949,7 @@ class Sledgehammer(Tool):
 
 
 class Sharphammer(Tool):
-    icon_symbol = "s"
+    def_icon_symbol = "s"
     name = "Sharphammer"
     job = "Weaponsmith"
     make_priority = 4
@@ -1833,7 +1959,7 @@ class Sharphammer(Tool):
 
 
 class Pickaxe(Tool):
-    icon_symbol = "p"
+    def_icon_symbol = "p"
     name = "Pickaxe"
     job = "Miner"
     make_priority = 3
@@ -1843,7 +1969,7 @@ class Pickaxe(Tool):
 
 
 class Spatula(Tool):
-    icon_symbol = "s"
+    def_icon_symbol = "s"
     name = "Spatula"
     job = "Potter"
     make_priority = 3
@@ -1856,7 +1982,7 @@ class Spatula(Tool):
 
 
 class Sand_Chisel(Tool):
-    icon_symbol = "s"
+    def_icon_symbol = "s"
     name = "Sand_Chisel"
     job = "Sandstonecutter"
     make_priority = 3
@@ -1869,7 +1995,7 @@ class Sand_Chisel(Tool):
 
 
 class Chisel(Tool):
-    icon_symbol = "c"
+    def_icon_symbol = "c"
     name = "Chisel"
     job = "Stonecutter"
     make_priority = 3
@@ -1882,7 +2008,7 @@ class Chisel(Tool):
 
 
 class Saw(Tool):
-    icon_symbol = "s"
+    def_icon_symbol = "s"
     name = "Saw"
     job = "Carpenter"
     make_priority = 3
@@ -1894,15 +2020,13 @@ class Saw(Tool):
 
 
 class City(Object):
-    icon_color = "grey"
-    icon_symbol = "0"
+    def_icon_color = "grey"
+    def_icon_symbol = "0"
     overlayable = True
     name = "City"
     default_description = ""  # Uses custom code.
     priority = 30  # Should actually be above mob layer.
     def_size = 5
-
-    starting_citizens = 5
 
     needs_processing = True
     action_time = 24  # Once a day they get new tasks.
@@ -1911,7 +2035,11 @@ class City(Object):
     ignition_point = 1100
     absorb_coefficient = 1.0
 
-    def __init__(self, loc, faction=None):
+    siemens_coefficient = 0.0
+    specific_resistance = 1.0
+    store_coefficient = 0.0
+
+    def __init__(self, loc, faction=None, starting_citizens=5):
         global log
 
         self.faction = faction
@@ -1968,12 +2096,15 @@ class City(Object):
                           "iron": 0,
                           "gold": 0}
 
-        for N in range(self.starting_citizens):
+        for N in range(int(starting_citizens)):
             citizen = Citizen(self, "Peasant", self)
 
         for GUI in self.world.GUIs:
             if(GUI.icon_update):
                 GUI.log_to_GUI(self.display_name + " has been settled in (" + str(self.x) + ", " + str(self.y) + ") at " + time_to_date(self.world.time) + "\n")
+
+        self.icon["color"] = self.faction.color
+        self.update_icon()
 
     def getExamineText(self):
         text = super().getExamineText()
@@ -2021,7 +2152,7 @@ class City(Object):
                              "Weaponsmith": 0}
         self.structure_requests = {"Construction": 0,
                                "House": int(self.max_population - len(self.citizens) <= 0),
-                               "Farm": int(round((actual_food_required + (self.max_population - len(self.citizens)) * self.action_time) / Farm.default_resource_multiplier / 3)),  # Since a farm generally supplies three Citizens.
+                               "Farm": int(round((actual_food_required + (self.max_population - len(self.citizens)) * self.action_time) / Farm.default_resource_multiplier)),  # Since a farm generally supplies three Citizens.
                                "Mine": 0}
 
         strucs = self.world.get_region_contents(self.x, self.y, 2, 2)
@@ -2064,6 +2195,8 @@ class City(Object):
 
                 if(isinstance(struc, Structure)):
                     if(struc.name != "House" and struc.name != "City"):  # Houses are calculated as special snowflake case.
+                        if(isinstance(struc, Construction)):
+                            self.structure_requests[struc.struc_type.name] -= 1
                         self.structure_requests[struc.name] -= 1
                     if(struc.job_to_harvest):
                         self.job_requests[struc.job_to_harvest] += 1
@@ -2140,16 +2273,16 @@ class City(Object):
 
         self.generating_tasks = False
 
-        if(self.resources["food"] > 30 and (food_required < 0) and (len(self.citizens) < self.max_population)):
+        if(self.resources["food"] > 30 and (food_required < self.action_time) and (len(self.citizens) < self.max_population)):
             self.resources["food"] -= 30
             Toddler(self, "Toddler", self)
 
         if(len(self.citizens) < 100):
-            self.icon_symbol = str(int(len(self.citizens) // 10))
+            self.def_icon_symbol = str(int(len(self.citizens) // 10))
         elif(len(self.citizens) < 1000):
-             self.icon_symbol = "L"
+             self.def_icon_symbol = "L"
         elif(len(self.citizens) < 10000):
-             self.icon_symbol = "M"
+             self.def_icon_symbol = "M"
 
         if(len(self.citizens) > self.max_population): # Overpopulation - DEATH!
             cit = random.choice(self.citizens)
@@ -2204,9 +2337,6 @@ class City(Object):
             self.qdel()
             del self
 
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
-
     def get_task(self, city):
         if(city.faction != self.faction):
             relation = city.faction.get_relationship(self.faction)
@@ -2222,7 +2352,7 @@ class City(Object):
 
 
 class Structure(Resource):
-    icon_color = "grey"
+    def_icon_color = "grey"
     overlayable = True
     def_size = 5
     priority = 12
@@ -2243,8 +2373,10 @@ class Structure(Resource):
         self.material = material
         self.integrity *= self.resource_integrity[self.material]
 
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.faction.color if self.faction else self.icon_color, "font": self.icon_font}
+        if(faction):
+            faction.members.append(self)
+            self.icon["color"] = self.faction.color
+            self.update_icon()
 
     def get_task(self, city):
         if(city.faction != self.faction):
@@ -2262,8 +2394,9 @@ class Structure(Resource):
         super().Destroy()
         del self
 
+
 class Construction(Structure):
-    icon_symbol = "C"
+    def_icon_symbol = "C"
     name = "Construction"
     default_description = "When Construction will grow up, it will become a big Structure!"
 
@@ -2296,7 +2429,7 @@ class Construction(Structure):
 
 
 class House(Structure):
-    icon_symbol = "H"
+    def_icon_symbol = "H"
     name = "House"
     default_description = "A place for Citizens to call home."
     work_required = 20
@@ -2304,6 +2437,10 @@ class House(Structure):
     can_ignite = True
     ignition_point = 1100
     absorb_coefficient = 1.0
+
+    siemens_coefficient = 0.3  # Currently we use Wood.
+    specific_resistance = 0.9
+    store_coefficient = 0.1
 
     make_priority = 3
     possible_resources = ["stone", "clay", "sandstone"]
@@ -2317,7 +2454,7 @@ class House(Structure):
 
 
 class Farm(Structure):
-    icon_symbol = "F"
+    def_icon_symbol = "F"
     name = "Farm"
     default_description = "A place to get food from."
     work_required = 15
@@ -2335,6 +2472,10 @@ class Farm(Structure):
     ignition_point = 1100
     absorb_coefficient = 1.0
 
+    siemens_coefficient = 0.3
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+
     make_priority = 3
     possible_resources = ["wood", "clay", "sandstone"]
     can_be_built_on = (Plains)
@@ -2347,7 +2488,7 @@ class Farm(Structure):
 
 
 class Mine(Structure):
-    icon_symbol = "M"
+    def_icon_symbol = "M"
     name = "Mine"
     default_description = "Diggy-diggy hole..."
     work_required = 25
@@ -2367,12 +2508,16 @@ class Mine(Structure):
 
     requirements = {"restype_": 30}
 
+    siemens_coefficient = 0.0
+    specific_resistance = 0.0
+    store_coefficient = 0.0
+
 
 # Mobs.
 class Citizen(Mob):
-    icon_symbol = "o"
-    icon_color = "grey"
-    icon_font = ("Courier", 7)
+    def_icon_symbol = "o"
+    def_icon_color = "grey"
+    def_icon_font = ("Courier", 7)
     priority = 29  # Real high.
     overlayable = True
     def_size = 1
@@ -2387,12 +2532,19 @@ class Citizen(Mob):
     absorb_coefficient = 1.0
     temp_per_integrity_point = 10  # Citizens burn easily.
 
+    siemens_coefficient = 0.0
+    specific_resistance = 0.9
+    store_coefficient = 0.1
+    charge_per_integrity_point = 10  # Citizens zap zap.
+    charge_glow = True
+
     def __init__(self, loc, job, city=None):
+        super().__init__(loc)
+
         self.city = None
         if(city):
             self.join_city(city)
 
-        super().__init__(loc)
         self.resources = {"food": 30,  # We give them some starting food.
                           "water": 30,
                           "wood": 0,
@@ -2430,12 +2582,14 @@ class Citizen(Mob):
         if(self.city):
             self.leave_city()
         self.city = city
+        self.icon["color"] = self.city.faction.color
         if(self not in self.city.citizens):
             self.city.add_citizen(self)
 
     def leave_city(self):
         if(self in self.city.citizens):
             self.city.remove_citizen(self)
+        self.icon["color"] = self.def_icon_color
         self.city = None
 
     def process(self):
@@ -2450,18 +2604,28 @@ class Citizen(Mob):
         if(self.actions_to_perform <= 0):  # OVERWORKING: Citizens can work more than they should, but they will die quicker.
             if(prob(round(abs(self.actions_to_perform) * self.action_time))):
                 if(self.crumble(abs(self.actions_to_perform))):
+                    """print("----------------------------")
+                    print(self.display_name + " died of overworking.")
+                    print("----------------------------")"""
                     return False  # We dead.
 
         if(self.saturation == 0):
             self.malnutrition += self.action_time
+            #print(self.display_name + " is slightly malnourished[" + str(self.malnutrition) + "].")
             if(prob(self.malnutrition // 100)):
                 if(self.crumble(self.malnutrition // 100)):
+                    """print("----------------------------")
+                    print(self.display_name + " died of malnutrition.")
+                    print("----------------------------")"""
                     return False  # We dead.
         elif(self.malnutrition > 0):
-            self.malnutrition = max([self.malnutrition - int(round(self.saturation / (self.max_saturation)) * self.action_time), 0])
+            self.malnutrition = max([self.malnutrition - int(round(self.saturation / (self.max_saturation)) * self.action_time * self.health), 0])
 
         if(prob(self.age // 8760)):  # Sometimes they just die.
             if(self.crumble(self.age // 87600)):
+                """print("----------------------------")
+                print(self.display_name + " died of old age.")
+                print("----------------------------")"""
                 return False  # We dead.
 
         """
@@ -2476,10 +2640,11 @@ class Citizen(Mob):
             # We append this to actual proper tasks, since we don't want this erased.
             self.personal_tasks.append({"task": "grab", "res_required": {"food": int(round(self.hunger_rate * self.action_time) * 6)}, "target": self.city, "dist_required": -1, "require_action": False})
         if(self.saturation < self.max_saturation):
-            self.personal_tasks.append({"task": "eat", "res_required": {"food": self.max_saturation - self.saturation}, "require_action": False})
+            self.personal_tasks.append({"task": "eat", "res_required": {"food": (self.max_saturation - self.saturation) + int(round(self.malnutrition / self.action_time))}, "require_action": False})
+        if(not self.city or (self.malnutrition >= 400)):  # This city bad(SIC!)! Run!
+            self.personal_tasks.append({"task": "settle", "target": None, "refugee": True, "dist_required": 0, "require_action": False})
         if(self.actions_to_perform <= 0):
             """
-
             This fragment is supposed to allow Citizens to rest more efficiently later.
 
             target = self.world.get_turf(self.x, self.y)
@@ -2626,6 +2791,54 @@ class Citizen(Mob):
             elif(task["task"] == "kidnap"):
                 return self.kidnap(task["target"])
 
+        elif(task["task"] == "settle"):
+            if(not task["target"]):
+                res_score_multiplier = {"food": 2.0,
+                                        "water": 1.0,
+                                        "wood": 1.5,
+                                        "clay": 1.0,
+                                        "sandstone": 1.0,
+                                        "stone": 1.3,
+                                        "iron": 1.0,
+                                        "gold": 1.0}
+                turf_scores = {}
+                for x_ in range(self.x - 3, self.x + 4):
+                    for y_ in range(self.y - 3, self.y + 4):
+                        if(x_ < 0 or y_ < 0 or x_ >= self.world.max_x or y_ >= self.world.max_y):
+                            continue
+                        score = 0
+                        contents = self.world.get_region_contents(x_, y_, 2, 2)
+                        for content in contents:
+                            if(isinstance(content, Resource) and content.resource):
+                                score += content.default_resource_multiplier * content.resource_multiplier * res_score_multiplier[content.resource]
+                                if(isinstance(content, Volcano)):
+                                    score -= 100  # Volcanos are dangerous!
+                            elif(isinstance(content, Basalt)):
+                                score -= 10  # Volcano is nearby...
+                            elif(isinstance(content, City)):
+                                if(task["refugee"]):
+                                    if(self.city and content == self.city):
+                                        continue
+                                    self.join_city(content)
+                                    return 2  # Well, we did "settle" in a new City.
+                                else:
+                                    if(self.city and self.city.faction != content.faction and self.city.faction.get_relationship(content.faction) == "Hostile"):
+                                        score += 30  # War is war. We need to set up a camp.
+                                    else:
+                                        score -= 10  # People generally dislike having somebody else on their territory.
+                        turf_scores[str(x_) + "/" + str(y_)] = score
+
+                max_score = 0  # Add in requirements calculation later. e.g. Water is quite required.
+                max_coord = None
+                for coord in turf_scores:
+                    if(turf_scores[coord] > max_score):
+                        max_score = turf_scores[coord]
+                        max_coord = coord
+                coord_split = max_coord.split("/")
+                task["target"] = self.world.get_turf(int(coord_split[0]), int(coord_split[1]))
+                return 0
+            return self.settle(task["target"])
+
         elif(task["task"] == "rest"):
             return self.rest(task["target"])
 
@@ -2706,6 +2919,13 @@ class Citizen(Mob):
                 return 2
         return 1
 
+    def settle(self, target):
+        """
+        Target is the turf we're settling on.
+        """
+        self.join_city(City(target, self.city.faction if self.city else None, 0))
+        return 2
+
     def rest(self, target):
         self.actions_to_perform = min([self.max_actions_to_perform, self.actions_to_perform + 1])
         if(prob(self.health)):  # A healthy spirit in a healthy body.
@@ -2760,6 +2980,7 @@ class Citizen(Mob):
                 target.faction.adjust_relationship(self.city.faction, -30)  # I mean claiming other's territory is quite a threat.
                 target.faction.members.remove(target)
                 target.faction = None
+                target.icon["color"] = target.def_icon_color
                 target.update_icon()
         # self.actions_to_perform -= 1  # Action removal is handled in destroy().
         return 2
@@ -2818,7 +3039,13 @@ class Citizen(Mob):
         for res in resources_required:
             self.resources[res] -= actual_eat_size[res]
             eaten += actual_eat_size[res]
-        self.saturation = min([self.max_saturation, self.saturation + eaten])
+
+        overeat = self.saturation + eaten - self.max_saturation
+        if(overeat > 0):
+            self.saturation = self.max_saturation
+            self.malnutrition -= overeat * self.action_time
+        else:
+            self.saturation = self.saturation + eaten
         return 2  # Eating doesn't tak an action, come on.
 
     def put_tools(self, target):
@@ -2891,7 +3118,8 @@ class Citizen(Mob):
         if(self.job == job):
             return
         self.job = job
-        self.icon_symbol = job[0].lower()  # Lifehack.
+        self.icon["symbol"] = job[0].lower()
+        self.update_icon()
         self.display_name = self.job + " " + self.id
         self.find_tool()
 
@@ -2903,9 +3131,6 @@ class Citizen(Mob):
                 continue
             if(tool.quality > self.get_tool_quality(self.job)):
                 self.tasks.append({"priority": 1, "task": "equip", "item": tool, "target": self.city, "dist_required": -1, "require_action": False})
-
-    def set_icon(self):
-        self.icon = {"symbol": self.icon_symbol, "color": self.city.faction.color if self.city and not self.city.qdeling else self.icon_color, "font": self.icon_font}
 
     def get_task(self, city):
         if(self.city and city.faction != self.city.faction):
@@ -2928,7 +3153,7 @@ class Citizen(Mob):
 
 
 class Toddler(Citizen):
-    icon_symbol = "t"
+    def_icon_symbol = "t"
     name = "Toddler"
     max_actions_to_perform = 1
     can_work = False
@@ -2955,6 +3180,9 @@ class Toddler(Citizen):
 
     def process(self):
         if(not super().process()):
+            """print("----------------------------")
+            print(self.display_name + " died  at the age of " + str(self.age) + ".")
+            print("----------------------------")"""
             return False
 
         if((self.age / 8760) >= 1):
